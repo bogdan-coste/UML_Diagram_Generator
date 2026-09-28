@@ -1,0 +1,33 @@
+# Python virtual environment
+venv/
+.venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Generated output files
+*.gaphor
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary / test artifacts
+test_fix.py
+test_e2e.py
+test_*.gaphor
+fixed_output.*

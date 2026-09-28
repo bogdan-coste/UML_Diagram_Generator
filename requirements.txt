@@ -1,0 +1,38 @@
+# ==============================================================================
+# Architecture Diagram Generator — Python Dependencies
+# ==============================================================================
+# Install with:   pip install -r requirements.txt
+# Or on first run: setup.bat
+# ==============================================================================
+
+# --- Environment ------------------------------------------------------------------
+python-dotenv>=1.0.0
+
+# --- Static Analysis (tree-sitter for Java + Python) ------------------------------
+tree-sitter>=0.23.0
+tree-sitter-java>=0.23.0
+tree-sitter-python>=0.23.0
+
+# --- Graph processing --------------------------------------------------------------
+networkx>=3.0
+
+# --- UI (Streamlit web + Tkinter desktop built-in) ----------------------------------
+streamlit>=1.28.0
+
+# --- HTTP client (Ollama REST API) --------------------------------------------------
+requests>=2.31.0
+
+# --- Multi-format diagram export ---------------------------------------------------
+# PlantUML is rendered via text generation; no library needed
+# Graphviz Python bindings for .dot output rendering
+graphviz>=0.20.0
+
+# --- RAG / Embeddings (optional) ---------------------------------------------------
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# --- Dataset processing -------------------------------------------------------------
+pandas>=2.0.0
+
+# --- Testing / Development ----------------------------------------------------------
+pytest>=7.0.0
