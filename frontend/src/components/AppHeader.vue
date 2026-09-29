@@ -1,8 +1,5 @@
 <script setup>
-/**
- * Carbon UI Shell header. Navigation items switch the active view; the
- * application is small enough that a fixed header is all the chrome we need.
- */
+
 defineProps({
   items: { type: Array, default: () => [] },
   active: { type: String, default: '' },

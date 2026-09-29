@@ -109,6 +109,44 @@ def _find_direct(node: Node, *types: str) -> list[Node]:
 # ---------------------------------------------------------------------------
 # Java Abstract Syntax Tree extraction
 # ---------------------------------------------------------------------------
+
+# Node types that can denote a Java type. Extraction used to look only for
+# `type_identifier`, which silently dropped scalars, `void`, arrays, qualified
+# names and generics from parameter and return-type lists.
+JAVA_TYPE_NODES = (
+    "type_identifier",
+    "scoped_type_identifier",
+    "generic_type",
+    "array_type",
+    # Scalars are distinct nodes in tree-sitter-java rather than one
+    # `primitive_type`: `int`/`long`/`char` are `integral_type`, `float`/
+    # `double` are `floating_point_type`, `boolean` is `boolean_type`.
+    # `primitive_type` stays listed because some versions expose it as the
+    # supertype and it is harmless when absent.
+    "primitive_type",
+    "integral_type",
+    "floating_point_type",
+    "boolean_type",
+    "void_type",
+)
+
+
+def _java_type_of(owner: Node, source: bytes) -> str:
+    """Text of the first type *owner* declares directly (``int``, ``List<String>``)."""
+    for child in owner.children:
+        if child.type in JAVA_TYPE_NODES:
+            return _text_of(child, source)
+    return ""
+
+
+def _java_type_base(node: Node, source: bytes) -> str:
+    """Base name of a type node, dropping type arguments (``Bar`` for ``Bar<T>``)."""
+    if node.type == "generic_type":
+        base = _find_direct(node, "type_identifier", "scoped_type_identifier")
+        return _text_of(base[0], source) if base else ""
+    return _text_of(node, source)
+
+
 def _extract_java_package(root: Node, source: bytes) -> str:
     for child in root.children:
         if child.type == "package_declaration":
@@ -142,14 +180,18 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: list[str])
     if superclass_child:
         superclass = _first_child_text(superclass_child[0], "type_identifier", source) or ""
 
-    # Interfaces
+    # Interfaces. Only the top-level type names count: recursing into the
+    # declaration also collects type arguments, so `implements Bar<T>` recorded
+    # `T` as an implemented interface — and could add a spurious `implements`
+    # edge whenever a type argument happened to name a known class.
     interfaces: list[str] = []
     si = _find_direct(node, "super_interfaces")
     if si:
-        for ti in _find_all(si[0], "type_identifier"):
-            txt = _text_of(ti, source)
-            if txt not in interfaces:
-                interfaces.append(txt)
+        for type_list in _find_direct(si[0], "type_list"):
+            for type_node in _find_direct(type_list, *JAVA_TYPE_NODES):
+                base = _java_type_base(type_node, source)
+                if base and base not in interfaces:
+                    interfaces.append(base)
 
     # Methods
     methods: list[dict[str, Any]] = []
@@ -159,20 +201,16 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: list[str])
             method_name = _first_child_text(method_node, "identifier", source) or ""
             return_type = ""
             if method_node.type == "method_declaration":
-                ret = _find_direct(method_node, "type_identifier")
-                if not ret:
-                    ret = _find_direct(method_node, "generic_type")
-                if ret:
-                    return_type = _text_of(ret[0], source)  # includes generics
+                return_type = _java_type_of(method_node, source)
 
             # Parameters
             params: list[str] = []
             fp_list = _find_direct(method_node, "formal_parameters")
             if fp_list:
                 for fp in _find_all(fp_list[0], "formal_parameter"):
-                    ti = _find_direct(fp, "type_identifier")
-                    if ti:
-                        params.append(_text_of(ti[0], source))
+                    ptype = _java_type_of(fp, source)
+                    if ptype:
+                        params.append(ptype)
 
             methods.append({
                 "name": method_name,
@@ -195,11 +233,9 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: list[str])
             fp_list = _find_direct(constr, "formal_parameters")
             if fp_list:
                 for fp in _find_all(fp_list[0], "formal_parameter"):
-                    ti = _find_direct(fp, "type_identifier")
-                    if ti:
-                        ptype = _text_of(ti[0], source)
-                        if ptype not in constructor_params:
-                            constructor_params.append(ptype)
+                    ptype = _java_type_of(fp, source)
+                    if ptype and ptype not in constructor_params:
+                        constructor_params.append(ptype)
 
     return {
         "name": name,
@@ -225,19 +261,14 @@ def _extract_java_interface(node: Node, source: bytes, pkg: str, imports: list[s
     if body:
         for md in _find_direct(body[0], "method_declaration"):
             mname = _first_child_text(md, "identifier", source) or ""
-            ret_type = ""
-            ret = _find_direct(md, "type_identifier")
-            if not ret:
-                ret = _find_direct(md, "generic_type")
-            if ret:
-                ret_type = _text_of(ret[0], source)
+            ret_type = _java_type_of(md, source)
             params: list[str] = []
             fp_list = _find_direct(md, "formal_parameters")
             if fp_list:
                 for fp in _find_all(fp_list[0], "formal_parameter"):
-                    ti = _find_direct(fp, "type_identifier")
-                    if ti:
-                        params.append(_text_of(ti[0], source))
+                    ptype = _java_type_of(fp, source)
+                    if ptype:
+                        params.append(ptype)
             methods.append({"name": mname, "return_type": ret_type, "params": params})
 
     return {

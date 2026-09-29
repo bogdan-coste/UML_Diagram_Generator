@@ -5,8 +5,9 @@ Three ways in, deliberately routed differently:
 * ``folder`` — the static pipeline (tree-sitter → graph → exporter). No model.
 * ``code`` — a pasted snippet, written to a temp file so the *same* static
   pipeline can run on it. The language is inferred from the source.
-* ``text`` / ``story`` — prose has no ground truth to extract, so the LLM
-  extracts a graph, which the deterministic exporters then render.
+* ``text`` / ``story`` — prose has no ground truth to extract, so a model
+  extracts a graph, which the deterministic exporters then render. Either the
+  remote LLM or the local fine-tuned adapter can act as that model.
 
 Keeping `text` routed through a graph (rather than asking the LLM for DSL
 directly) is what lets the response report graph statistics, and it means the
@@ -86,6 +87,11 @@ class GraphBuild:
     graph: nx.DiGraph
     files: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Set only by the prose path. The fine-tuned model's raw DSL, kept so the
+    # PlantUML response can return what the model actually wrote instead of the
+    # deterministic re-render of its parsed graph -- otherwise a parser miss is
+    # indistinguishable from a model miss.
+    model_dsl: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +190,53 @@ def build_from_text(content: str, *, is_story: bool) -> GraphBuild:
     return GraphBuild(graph=graph, files=[])
 
 
+def build_from_text_with_adapter(content: str, *, is_story: bool) -> GraphBuild:
+    """Extract a graph from prose using the local fine-tuned adapter.
+
+    Prose is still routed through a graph, exactly like the LLM path: the model
+    emits PlantUML and the existing parser turns it back into a graph, so the
+    response can report statistics and every exporter can re-render it. The
+    model therefore contributes *content*; layout stays deterministic.
+    """
+    from src.dataset import parse_plantuml
+    from src.generation.local_adapter import generate_dsl, strip_code_fences
+    from src.generation.postprocess import normalize_plantuml
+    from src.prompts.prompt_templates import PromptTemplates
+
+    description = content.strip()
+    if is_story:
+        description = f"USER STORY:\n{description}"
+
+    dsl = generate_dsl(
+        PromptTemplates.build_prompt(description, output_format="plantuml")
+    )
+    if not dsl:
+        raise PipelineError(
+            "The fine-tuned model was unavailable (no GPU, or the adapter is "
+            "missing). Configure LLM_API_KEY / LLM_BASE_URL for the remote path, "
+            "or use mode 'folder'/'code' for static analysis."
+        )
+
+    # Repair mechanical defects before parsing, so the graph and the returned DSL
+    # agree -- and so PlantUML renders what we think it renders.
+    dsl, fixes = normalize_plantuml(strip_code_fences(dsl))
+
+    graph = parse_plantuml(dsl)
+    if graph is None:
+        raise PipelineError(
+            "The fine-tuned model produced output that could not be read as a "
+            "PlantUML class diagram."
+        )
+
+    _require_nodes(graph, "the model output")
+    graph.graph.setdefault("title", DEFAULT_TITLE)
+    warnings = [
+        "Diagram content was extracted by the fine-tuned model and is not validated."
+    ]
+    warnings += [f"Normalised model output: {fix}." for fix in fixes]
+    return GraphBuild(graph=graph, files=[], warnings=warnings, model_dsl=dsl)
+
+
 # ---------------------------------------------------------------------------
 # Enrichment, rendering, summarising
 # ---------------------------------------------------------------------------
@@ -249,6 +302,59 @@ def render(
     if output_format == "graphviz":
         return to_graphviz_dot(graph, title=title), effective
     return to_plantuml(graph, title=title), effective
+
+
+# The adapter was fine-tuned on exactly one task: canonical-AST description of
+# real Java/Python code -> PlantUML class diagram. Anything else is
+# out-of-distribution, so it is refused and rendered deterministically instead
+# of being guessed at.
+ADAPTER_FORMATS = {"plantuml"}
+ADAPTER_DIAGRAM_TYPES = {"class"}
+
+
+def render_with_adapter(
+    graph: nx.DiGraph,
+    output_format: OutputFormat,
+    diagram_type: DiagramType,
+    warnings: list[str],
+) -> tuple[str, DiagramType]:
+    """Render by asking the fine-tuned adapter, falling back deterministically.
+
+    The prompt is rebuilt with ``PromptTemplates.build_prompt`` -- the same
+    function the dataset builder calls -- so the model is served the input shape
+    it was trained on rather than something hand-rolled here.
+    """
+    from src.generation.local_adapter import generate_dsl
+    from src.generation.postprocess import normalize_plantuml
+    from src.prompts.prompt_templates import PromptTemplates
+
+    if output_format not in ADAPTER_FORMATS or diagram_type not in ADAPTER_DIAGRAM_TYPES:
+        warnings.append(
+            f"The fine-tuned model only covers plantuml/class diagrams; "
+            f"{output_format}/{diagram_type} was rendered deterministically."
+        )
+        return render(graph, output_format, diagram_type, warnings)
+
+    # Imported here so a missing rag stack cannot break module import.
+    from src.rag import canonical_ast_to_text, graph_to_canonical_ast
+
+    description = canonical_ast_to_text(graph_to_canonical_ast(graph))
+    prompt = PromptTemplates.build_prompt(
+        description, diagram_type=diagram_type, output_format=output_format
+    )
+
+    dsl = generate_dsl(prompt)
+    if not dsl:
+        warnings.append(
+            "The fine-tuned model was unavailable (no GPU, or the adapter is "
+            "missing); rendered deterministically instead."
+        )
+        return render(graph, output_format, diagram_type, warnings)
+
+    dsl, fixes = normalize_plantuml(dsl)
+    warnings += [f"Normalised model output: {fix}." for fix in fixes]
+    warnings.append("Rendered by the fine-tuned model; the output was not validated.")
+    return dsl, diagram_type
 
 
 def summarise(graph: nx.DiGraph) -> GraphSummary:

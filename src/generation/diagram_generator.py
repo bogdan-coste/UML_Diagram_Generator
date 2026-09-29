@@ -3,7 +3,9 @@ from src.prompts.prompt_templates import PromptTemplates
 
 
 class DiagramGeneratorLLM:
-    """Ask the LLM for the diagram source that matches a description."""
+    """
+        Ask the LLM for the diagram source that matches a description.
+    """
 
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
@@ -43,7 +45,9 @@ class DiagramGeneratorLLM:
 
     @staticmethod
     def _strip_code_fences(text: str) -> str:
-        """Drop a wrapping ``` fence, which models add despite being told not to."""
+        """
+            Drop a wrapping ``` fence, which models add despite being told not to.
+        """
         cleaned = text.strip()
         if not cleaned.startswith("```"):
             return cleaned

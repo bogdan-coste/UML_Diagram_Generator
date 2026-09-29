@@ -69,7 +69,8 @@ These shapes are documented as JSDoc typedefs in `src/api/types.js`.
   "diagram_type": "class",   // class | flowchart | sequence | er | component | deployment | state
   "format": "plantuml",      // plantuml | mermaid | structurizr | graphviz
   "use_ai": true,            // optional — LLM semantic enrichment
-  "use_rag": false           // optional — retrieve similar examples
+  "use_rag": false,          // optional — retrieve similar examples
+  "use_finetuned": false     // optional — use the local fine-tuned adapter (all modes)
 }
 ```
 

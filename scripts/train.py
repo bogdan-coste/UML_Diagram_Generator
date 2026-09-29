@@ -25,7 +25,12 @@ def main():
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--base", default="bigcode/starcoder2-3b")
     ap.add_argument("--epochs", type=float, default=2)
-    ap.add_argument("--max-length", type=int, default=2048)
+    ap.add_argument(
+        "--max-length",
+        type=int,
+        default=4096,
+        help="must match build_dataset.py --max-length; anything lower truncates targets",
+    )
     ap.add_argument(
         "--eval-batch-size",
         type=int,

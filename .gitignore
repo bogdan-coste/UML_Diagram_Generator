@@ -49,6 +49,7 @@ repos/
 # before committing either. Un-ignore `data/` deliberately if you decide the
 # derived JSONL is safe to redistribute.
 data/
+data-*/
 models/
 chroma_db/
 

@@ -1,15 +1,19 @@
 # ArchiGen AI
 
-Automatic generation of software architecture diagrams from source code and natural-language descriptions, combining deterministic AST analysis with a fine-tuned code model and retrieval-augmented generation.
+Automatic generation of software architecture diagrams from source code and natural-language descriptions, combining deterministic AST analysis with a fine-tuned code model.
 
 Two input paths, deliberately handled by different machinery:
 
 | Input | Path | Method |
 |---|---|---|
 | An existing codebase | **Static** | tree-sitter AST → dependency graph → diagram. Deterministic, no model, no API key. |
-| A text description | **Generative** | Fine-tuned StarCoder2-3B + ChromaDB retrieval → DSL source. |
+| A text description | **Generative** | Fine-tuned StarCoder2-3B → DSL source. |
 
 The design principle behind the split: when there is ground truth (real code), extraction is exact and a language model can only add error. When there is no ground truth (a prose description), a model is the only option — and that is the case it is trained for.
+
+![Generating a PlantUML class diagram from a natural-language description](assets/natural-language-to-diagram.png)
+
+*A natural-language description on the left; the diagram produced by the fine-tuned StarCoder2-3B adapter on the right — 13 types with inheritance, implementation and composition all resolved. Rendered by PlantUML.*
 
 ---
 
@@ -23,6 +27,7 @@ The design principle behind the split: when there is ground truth (real code), e
 - QLoRA fine-tuning script (`scripts/train.py`)
 - Optional LLM enrichment with graceful fallback (`src/ai/`, `src/llm/`)
 - ChromaDB retrieval layer: canonical-AST conversion, sentence-transformer embeddings, persistent store, and metadata-filtered query (`src/rag/`)
+- Deterministic output repair for model-generated DSL (`src/generation/postprocess.py`)
 - FastAPI backend (`src/api/`) — `GET /health`, `POST /generate`, `GET /history`
 
 ---
@@ -59,9 +64,10 @@ Every step is deterministic and sorted, so the same repository produces byte-ide
 
 A prose description has no ground truth to extract, so this path generates DSL source with a fine-tuned model:
 
-1. The description is embedded and used to query the ChromaDB knowledge base for similar patterns, optionally filtered by notation (`query_knowledge_base(query, filter_meta={"format": ...})`).
-2. The description and any retrieved context are formatted with the prompt template for the target notation (`src/prompts/prompt_templates.py`).
-3. The model generates DSL source.
+1. The description is formatted with the prompt template (`src/prompts/prompt_templates.py`), using the exact input shape the adapter was trained on.
+2. The fine-tuned adapter generates PlantUML source.
+3. The output passes through a deterministic repair pass (`src/generation/postprocess.py`) which fixes mechanical grammar defects: inline `extends`/`implements` clauses that PlantUML silently ignores, non-UML relationship labels, a missing `@enduml`, and composition edges implied by member fields but never written out.
+4. The DSL is parsed back into a graph, so the response can report graph statistics and every exporter can re-render the same content in another notation.
 
 ### Pipeline
 
@@ -96,7 +102,7 @@ UML_Diagram_Generator/
 │   ├── dataset/              PlantUML parsing + graph similarity (round-trip validation)
 │   ├── evaluation/           Static-vs-LLM comparison metrics
 │   ├── exporters/            PlantUML, Mermaid, Structurizr, Graphviz DOT
-│   ├── generation/           LLM-backed diagram generation
+│   ├── generation/           Adapter loader, generation, deterministic output repair
 │   ├── git_integration/      Git hook runner + merge-request comments
 │   ├── graph/                NetworkX graph builder + edge extraction
 │   ├── ingestion/            Recursive traversal + tree-sitter parsing (Java, Python)
@@ -108,12 +114,15 @@ UML_Diagram_Generator/
 ├── scripts/
 │   ├── download_model.py     Fetch + verify the base model from the Hub
 │   ├── build_dataset.py      Deterministic dataset builder (label factory)
-│   └── train.py              QLoRA supervised fine-tuning
+│   ├── check_lengths.py      Token-length audit against the context window
+│   ├── train.py              QLoRA supervised fine-tuning
+│   └── eval.py               Validity rate + entity/edge F1 over the held-out split
+├── tests/                    Regression tests: parser extraction, round-trip direction
 ├── frontend/                 Vue 3 + Vite + IBM Carbon
 │   └── src/{components,api,composables,styles}
-├── data/                     train.jsonl, val.jsonl
-├── models/                   LoRA adapter output directory
-├── plans/                    Design notes
+├── assets/                   Screenshots used in this README
+├── data/                     Generated train.jsonl / val.jsonl (not committed)
+├── models/                   LoRA adapter output (not committed)
 └── requirements.txt
 ```
 
@@ -240,7 +249,7 @@ Use `python -u`: the Trainer writes progress to stdout, which is block-buffered 
 
 These are the metrics that matter for this task, and they are deliberately not loss-based. Per-token accuracy and loss both look excellent long before output is *usable*: a 200-token diagram generated at 99% per-token accuracy is still only correct end-to-end about 13% of the time (`0.99^200 ~= 0.13`), because a single malformed token invalidates the whole diagram. Validity rate is the honest measure.
 
-`src/evaluation/comparator.py` contains the static-vs-LLM comparison functions (`compare_entity_detection`, `compare_relationship_detection`, `compare_context_quality`) that the harness will build on.
+`scripts/eval.py` reports all of the above over the held-out split and writes `eval-generations.jsonl` next to the report, so a failing diagram can be inspected rather than merely counted. `src/evaluation/comparator.py` provides the underlying comparison functions.
 
 ---
 

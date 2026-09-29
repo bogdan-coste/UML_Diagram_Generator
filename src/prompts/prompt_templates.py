@@ -93,3 +93,32 @@ class PromptTemplates:
         ),
         "default": "- Follow the target notation's standard syntax exactly.\n",
     }
+
+    @classmethod
+    def build_prompt(
+        cls,
+        description: str,
+        diagram_type: str = "class",
+        output_format: str = "plantuml",
+        context: str = "(none)",
+    ) -> str:
+        """The exact input string a training pair is built from.
+
+        The dataset builder and the generation layer both call this, so a
+        fine-tuned model is served the same prompt shape it was trained on.
+        """
+        rules = cls.NOTATION_RULES.get(
+            output_format.lower().strip(), cls.NOTATION_RULES["default"]
+        )
+        return (
+            cls.DIAGRAM_GENERATION_SYSTEM_PROMPT
+            + "\n\n"
+            + cls.DIAGRAM_GENERATION_TEMPLATE.substitute(
+                description=description,
+                diagram_type=diagram_type,
+                output_format=output_format,
+                notation_rules=rules,
+                context=context,
+            )
+            + "\n\n"
+        )

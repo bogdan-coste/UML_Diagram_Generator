@@ -61,6 +61,7 @@ const form = reactive({
   format: 'plantuml',
   useAi: true,
   useRag: false,
+  useFinetuned: false,
 })
 
 const copy = computed(() => COPY[form.mode] ?? COPY.text)
@@ -83,6 +84,7 @@ function submit() {
     format: form.format,
     use_ai: form.useAi,
     use_rag: form.useRag,
+    use_finetuned: form.useFinetuned,
   })
 }
 </script>
@@ -190,6 +192,19 @@ function submit() {
           <input id="use-rag" v-model="form.useRag" class="cds--checkbox" type="checkbox" :disabled="generating" />
           <label class="cds--checkbox-label" for="use-rag">
             <span class="cds--checkbox-label-text">Retrieve similar examples (RAG)</span>
+          </label>
+        </div>
+
+        <div class="cds--form-item cds--checkbox-wrapper">
+          <input
+            id="use-finetuned"
+            v-model="form.useFinetuned"
+            class="cds--checkbox"
+            type="checkbox"
+            :disabled="generating"
+          />
+          <label class="cds--checkbox-label" for="use-finetuned">
+            <span class="cds--checkbox-label-text">Fine-tuned model (local adapter)</span>
           </label>
         </div>
       </div>

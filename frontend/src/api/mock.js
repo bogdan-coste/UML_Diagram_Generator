@@ -13,6 +13,9 @@ export const MOCK_HEALTH = {
   llm: true,
   rag: false,
   cuda: false,
+  finetuned: false,
+  finetuned_adapter: null,
+  finetuned_model: null,
   version: '0.1.0-mock',
 }
 

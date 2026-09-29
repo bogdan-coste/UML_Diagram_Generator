@@ -16,6 +16,12 @@ PUML_RELATION_MAP = {
     "dependency":    " ..> ",
 }
 
+# In UML the generalization and realization arrowheads sit on the *supertype*,
+# so `A <|-- B` reads "B extends A". The graph stores those edges the other way
+# round (subclass -> superclass), so their operands are swapped on emission.
+# Composition and dependency point along the stored direction and are left alone.
+REVERSED_RELATIONS = frozenset({"inheritance", "implementation"})
+
 
 def _sanitise(name: str) -> str:
     return name.replace(".", "_").replace("-", "_").replace(" ", "_")
@@ -88,6 +94,8 @@ def to_plantuml(graph: nx.DiGraph, title: str = "Architecture Diagram") -> str:
         arrow = PUML_RELATION_MAP.get(edge_type, " --> ")
         src_safe = _sanitise(str(graph.nodes[src].get("name", src)))
         dst_safe = _sanitise(str(graph.nodes[dst].get("name", dst)))
+        if edge_type in REVERSED_RELATIONS:
+            src_safe, dst_safe = dst_safe, src_safe
         lines.append(f"{src_safe}{arrow}{dst_safe} : {edge_type}")
 
     lines.append("@enduml")

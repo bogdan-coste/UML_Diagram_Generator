@@ -84,14 +84,21 @@ def graph_to_canonical_ast(graph: nx.DiGraph) -> Dict[str, Any]:
 def canonical_ast_to_text(ast: Dict[str, Any]) -> str:
     """Convert a canonical AST into a compact text representation for embedding.
 
-    Format: "TITLE: [title]. Entities: Name1 (class, Context1): does X; ...
+    Format: "TITLE: [title]. Entities: Name1 (class, Context1): does X
+             [methods: run(id): Result, stop(): void]; ...
              Relationships: A -> B (dependency)"
     """
     lines = [f"TITLE: {ast.get('title', 'Untitled')}."]
 
     ent_lines = []
     for ent in ast.get("entities", []):
-        methods = ", ".join(m["name"] for m in ent.get("methods", []))
+        # Full signatures, not just names: `to_plantuml` renders each method's
+        # return type and parameters, so emitting only the name would ask the
+        # model to produce information it was never given.
+        methods = ", ".join(
+            f"{m['name']}({', '.join(m.get('params', []))}): {m.get('return_type', 'void')}"
+            for m in ent.get("methods", [])
+        )
         parts = [f"{ent['name']} ({ent['type']}, {ent['context']})"]
         if ent.get("responsibility"):
             parts.append(f": {ent['responsibility']}")

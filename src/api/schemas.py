@@ -46,6 +46,15 @@ class GenerateRequest(BaseModel):
         default=False,
         description="Request RAG retrieval (see the warning in the response).",
     )
+    use_finetuned: bool = Field(
+        default=False,
+        description=(
+            "Use the local fine-tuned adapter. For `text`/`story` it extracts the "
+            "graph from prose instead of the remote LLM, and the result is rendered "
+            "deterministically. For `code`/`folder` it renders the extracted graph "
+            "directly, which is plantuml/class only."
+        ),
+    )
 
 
 class GraphSummary(BaseModel):
@@ -77,7 +86,12 @@ class HealthResponse(BaseModel):
     """Payload returned by ``GET /health``."""
 
     status: HealthStatus
-    model: str
+    model: str = Field(
+        description=(
+            "Remote LLM model name from LLM_MODEL. Reported even when no endpoint "
+            "is configured, so it is not 'the model in use' -- see `finetuned`."
+        )
+    )
     llm: bool = Field(
         description=(
             "Whether an LLM endpoint is configured. This is a configuration "
@@ -86,6 +100,24 @@ class HealthResponse(BaseModel):
     )
     rag: bool
     cuda: bool
+    finetuned: bool = Field(
+        default=False,
+        description=(
+            "Whether the local fine-tuned adapter was found on disk. A filesystem "
+            "probe, not a model load — /health must stay fast."
+        ),
+    )
+    finetuned_adapter: str | None = Field(
+        default=None,
+        description="Path the backend looked in, so a miss is diagnosable.",
+    )
+    finetuned_model: str | None = Field(
+        default=None,
+        description=(
+            "Display name of the adapter that was detected -- its directory name, "
+            "so the status bar can show which one is loaded."
+        ),
+    )
     version: str | None = None
 
 

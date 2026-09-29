@@ -26,8 +26,10 @@ const meta = computed(() => {
   const h = props.health
   if (!h) return props.error || 'Waiting for the API …'
   const parts = [
-    `model ${h.model}`,
-    `llm ${h.llm ? 'configured' : 'not configured'}`,
+    `finetuned ${h.finetuned ? `ready (${h.finetuned_model ?? 'unknown'})` : 'missing'}`,
+    // The model name is only meaningful once an endpoint is configured; showing
+    // it bare next to `finetuned` reads as "the model in use", which it is not.
+    `llm ${h.llm ? `${h.model} configured` : 'not configured'}`,
     `rag ${h.rag ? 'on' : 'off'}`,
     `cuda ${h.cuda ? 'available' : 'none'}`,
   ]

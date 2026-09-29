@@ -195,16 +195,19 @@ def parse_mermaid_class_diagram(source: str) -> Optional[nx.DiGraph]:
 
     # --- Pass 2: Relationships ---
     # Mermaid relationship patterns (longer arrows first)
+    # The `rev` flag marks forms whose left-hand operand is the *subtype*.
+    # `A <|-- B` means B extends A, so the graph edge runs B -> A; `A --|> B`
+    # says the same thing with the operands the other way round.
     rel_patterns = [
         # "from" arrow "to" : label
-        (r"(\w+)\s*<\|--\s*(\w+)\s*(?::\s*(.*))?", "inheritance"),
-        (r"(\w+)\s*<\|\.\.\s*(\w+)\s*(?::\s*(.*))?", "implementation"),
+        (r"(\w+)\s*<\|--\s*(\w+)\s*(?::\s*(.*))?", "inheritance", True),
+        (r"(\w+)\s*<\|\.\.\s*(\w+)\s*(?::\s*(.*))?", "implementation", True),
         (r"(\w+)\s*\*--\s*(\w+)\s*(?::\s*(.*))?", "composition"),
         (r"(\w+)\s*\.\.>\s*(\w+)\s*(?::\s*(.*))?", "dependency"),
         (r"(\w+)\s*-->\s*(\w+)\s*(?::\s*(.*))?", "dependency"),
-        # Reversed arrows
-        (r"(\w+)\s*--\|>\s*(\w+)\s*(?::\s*(.*))?", "inheritance", True),
-        (r"(\w+)\s*\.\.\|>\s*(\w+)\s*(?::\s*(.*))?", "implementation", True),
+        # Same relationships, written with the arrowhead on the supertype.
+        (r"(\w+)\s*--\|>\s*(\w+)\s*(?::\s*(.*))?", "inheritance"),
+        (r"(\w+)\s*\.\.\|>\s*(\w+)\s*(?::\s*(.*))?", "implementation"),
         (r"(\w+)\s*--\*\s*(\w+)\s*(?::\s*(.*))?", "composition", True),
     ]
 
@@ -218,6 +221,23 @@ def parse_mermaid_class_diagram(source: str) -> Optional[nx.DiGraph]:
                 graph.add_edge(a, b, edge_type=edge_type, description=label)
 
     return graph if graph.number_of_nodes() > 0 else None
+
+
+def _clause_edge(match: "re.Match[str]") -> tuple[str, str, str] | None:
+    """(source, edge_type, target) from an optional inline `extends`/`implements` clause.
+
+    Our own exporter never writes one, but a model copying the phrasing of a prose
+    description attaches it to the declaration. PlantUML ignores it there, so the
+    edge has to be read back out of the clause or the relationship is lost twice.
+    """
+    keyword = match.group(3)
+    if not keyword:
+        return None
+    return (
+        match.group(2),
+        "inheritance" if keyword == "extends" else "implementation",
+        match.group(4),
+    )
 
 
 def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
@@ -240,10 +260,14 @@ def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
     is_interface = False
     is_abstract = False
     methods: List[Dict[str, Any]] = []
+    fields: List[str] = []
     responsibility = ""
     package_map: Dict[str, str] = {}
 
     lines = source.split("\n")
+    # Edges implied by an inline `extends`/`implements` clause; added last so both
+    # endpoints are known regardless of declaration order.
+    declared_edges: list[tuple[str, str, str]] = []
 
     for line in lines:
         stripped = line.strip()
@@ -273,7 +297,7 @@ def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
                 "context": current_package,
                 "responsibility": responsibility,
                 "methods": methods,
-                "fields": [],
+                "fields": fields,
                 "constructor_params": [],
                 "imports": [],
                 "file_path": "",
@@ -288,34 +312,60 @@ def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
             responsibility = ""
             continue
 
-        # Interface / Class / Abstract class
-        iface_match = re.match(r'interface\s+"([^"]+)"\s+as\s+(\w+)\s*\{', stripped)
+        # Interface / Class / Abstract class. A trailing `extends X` / `implements Y`
+        # is tolerated: the stricter pattern dropped the entire class, taking every
+        # relationship that referenced it along with it.
+        iface_match = re.match(
+            r'interface\s+"([^"]+)"\s+as\s+(\w+)(?:\s+(extends|implements)\s+(\w+))?\s*\{',
+            stripped,
+        )
         if iface_match:
             current_class = iface_match.group(2)
             is_interface = True
             is_abstract = False
             methods = []
+            fields = []
             responsibility = ""
+            clause = _clause_edge(iface_match)
+            if clause:
+                declared_edges.append(clause)
             continue
 
-        cls_match = re.match(r'(?:abstract\s+)?class\s+"([^"]+)"\s+as\s+(\w+)\s*\{', stripped)
+        cls_match = re.match(
+            r'(?:abstract\s+)?class\s+"([^"]+)"\s+as\s+(\w+)(?:\s+(extends|implements)\s+(\w+))?\s*\{',
+            stripped,
+        )
         if cls_match:
             current_class = cls_match.group(2)
             is_interface = False
             is_abstract = cls_match.group(0).startswith("abstract")
             methods = []
+            fields = []
             responsibility = ""
+            clause = _clause_edge(cls_match)
+            if clause:
+                declared_edges.append(clause)
             continue
 
         # Inside class body
         if current_class:
-            # Field / Method: +returnType methodName(params)
-            method_match = re.match(r"([+\-~#])(\w+)\s+([^(]+)\(([^)]*)\)", stripped)
+            # Method: visibility, optional return type, name, params.
+            # The return type must be optional: our own exporter always writes one,
+            # but a model given prose without types emits `+checkout(cart)`, which
+            # the older `([+\-~#])(\w+)\s+` pattern rejected -- silently dropping
+            # every member of the class from the reconstructed graph.
+            method_match = re.match(
+                r"([+\-~#])\s*(?:(\S+)\s+)?([A-Za-z_]\w*)\(([^)]*)\)", stripped
+            )
             if method_match:
                 methods.append({
                     "name": method_match.group(3).strip(),
-                    "return_type": method_match.group(2),
-                    "params": [p.strip() for p in method_match.group(4).split(",") if p.strip()],
+                    "return_type": (method_match.group(2) or "").strip(),
+                    "params": [
+                        p.strip()
+                        for p in method_match.group(4).split(",")
+                        if p.strip()
+                    ],
                 })
                 continue
 
@@ -325,16 +375,28 @@ def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
                 responsibility = field_match.group(1)
                 continue
 
+            # Field member, no parentheses: `+Repository repository`,
+            # `+LineItem[] lineItems`. Our exporter never writes these, but a model
+            # does -- and a field is what implies a composition relationship, so it
+            # has to survive into the graph.
+            member_match = re.match(r"([+\-~#])\s*(\S+)\s+([A-Za-z_]\w*)\s*$", stripped)
+            if member_match:
+                fields.append(member_match.group(2))
+                continue
+
     # --- Relationships ---
+    # The `rev` flag marks forms whose left-hand operand is the *subtype*.
+    # `A <|-- B` means B extends A, so the graph edge runs B -> A; `A --|> B`
+    # says the same thing with the operands the other way round. This mirrors
+    # the operand order that the PlantUML/Mermaid exporters emit.
     rel_patterns = [
-        (r"(\w+)\s*<\|--\s*(\w+)", "inheritance"),
-        (r"(\w+)\s*<\|\.\.\s*(\w+)", "implementation"),
+        (r"(\w+)\s*<\|--\s*(\w+)", "inheritance", True),
+        (r"(\w+)\s*<\|\.\.\s*(\w+)", "implementation", True),
         (r"(\w+)\s*\*--\s*(\w+)", "composition"),
         (r"(\w+)\s*\.\.>\s*(\w+)", "dependency"),
         (r"(\w+)\s*-->\s*(\w+)", "dependency"),
-        # Reversed
-        (r"(\w+)\s*--\|>\s*(\w+)", "inheritance", True),
-        (r"(\w+)\s*\.\.\|>\s*(\w+)", "implementation", True),
+        (r"(\w+)\s*--\|>\s*(\w+)", "inheritance"),
+        (r"(\w+)\s*\.\.\|>\s*(\w+)", "implementation"),
     ]
 
     for pattern, edge_type, *rev in rel_patterns:
@@ -344,6 +406,10 @@ def parse_plantuml(source: str) -> Optional[nx.DiGraph]:
                 a, b = b, a
             if a in graph and b in graph:
                 graph.add_edge(a, b, edge_type=edge_type, description="")
+
+    for src, edge_type, dst in declared_edges:
+        if src in graph and dst in graph and not graph.has_edge(src, dst):
+            graph.add_edge(src, dst, edge_type=edge_type, description="")
 
     return graph if graph.number_of_nodes() > 0 else None
 

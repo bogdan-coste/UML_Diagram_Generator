@@ -19,6 +19,10 @@
  * @property {OutputFormat} format        Requested DSL dialect.
  * @property {boolean}      [use_ai]      Enable LLM semantic enrichment.
  * @property {boolean}      [use_rag]     Enable RAG retrieval (requires an indexed vector store).
+ * @property {boolean}      [use_finetuned] Use the local fine-tuned adapter. For `text`/`story`
+ *                                            it extracts the graph from prose instead of the
+ *                                            remote LLM; for `code`/`folder` it renders the
+ *                                            extracted graph directly (plantuml/class only).
  *
  * @typedef {Object} GraphSummary
  * @property {string}   [title]
@@ -38,10 +42,17 @@
  *
  * @typedef {Object} HealthResponse
  * @property {'ok' | 'degraded' | 'error'} status
- * @property {string}  model      LLM model in use (e.g. `gpt-4o-mini`).
- * @property {boolean} llm        Whether an LLM endpoint is configured.
+ *   `degraded` only when neither a remote LLM nor the local adapter is available
+ *   (the `text`/`story` modes and AI enrichment are then unusable).
+ * @property {string}  model      Remote LLM model name, from `LLM_MODEL` (defaulted).
+ *                                 Only meaningful when `llm` is true, and unrelated to the
+ *                                 fine-tuned adapter.
+ * @property {boolean} llm        Whether a *remote* LLM endpoint is configured.
  * @property {boolean} rag        Whether RAG retrieval is enabled.
  * @property {boolean} cuda       Whether a CUDA device is available.
+ * @property {boolean} [finetuned]  Whether the local fine-tuned adapter was found on disk.
+ * @property {string}  [finetuned_adapter]  Path the backend looked in.
+ * @property {string}  [finetuned_model]  Directory name of the detected adapter.
  * @property {string}  [version]
  *
  * @typedef {Object} HistoryEntry
