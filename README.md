@@ -1,416 +1,283 @@
 # ArchiGen AI
 
-Generare automata de diagrame arhitecturale din cod sursa si descrieri in limbaj natural, folosind analiza statica AST, un model de limbaj fin-antrenat si un sistem de retrieval semantic.
+Automatic generation of software architecture diagrams from source code and natural-language descriptions, combining deterministic AST analysis with a fine-tuned code model and retrieval-augmented generation.
+
+Two input paths, deliberately handled by different machinery:
+
+| Input | Path | Method |
+|---|---|---|
+| An existing codebase | **Static** | tree-sitter AST → dependency graph → diagram. Deterministic, no model, no API key. |
+| A text description | **Generative** | Fine-tuned StarCoder2-3B + ChromaDB retrieval → DSL source. |
+
+The design principle behind the split: when there is ground truth (real code), extraction is exact and a language model can only add error. When there is no ground truth (a prose description), a model is the only option — and that is the case it is trained for.
 
 ---
 
-## Problema rezolvata
+## What's included
 
-Documentarea arhitecturala a unui proiect software este una dintre cele mai neglijate activitati din ciclul de viata al dezvoltarii. Motivul este simplu: crearea si mentinerea diagramelor este manuala, repetitiva si consumatoare de timp — iar rezultatele devin caduce aproape imediat ce codul evolueaza.
-
-### Costul real al documentatiei lipsa
-
-Studiile din industrie evidentiaza amploarea problemei:
-
-- **$85 miliarde** pierdute anual la nivel global din cauza timpului petrecut de ingineri incercand sa inteleaga cod nedocumentat sau documentat deficitar (*CHAOS Report, Standish Group*)
-- Developerii petrec in medie **58% din timp citind si intelegand cod existent**, nu scriind cod nou (*Stack Overflow Developer Survey 2023*)
-- Documentatia lipsa sau depasita este citata ca principala cauza a **intarzierilor in onboarding** — un nou developer intr-un proiect mediu spre mare are nevoie de **3–6 luni** pentru a deveni productiv in lipsa documentatiei arhitecturale
-- In proiectele cu mai mult de 100.000 de linii de cod, **60–70% din buguri** sunt introduse in componente al caror arhitect original nu mai este in echipa si al caror design nu a fost niciodata documentat vizual (*IEEE Software Engineering Report*)
-- Costul mediu al unui incident de productie cauzat de lipsa de intelegere arhitecturala este estimat la **$300,000–$500,000** pentru o companie de marime medie, incluzand downtime, debugging si remediere (*Gartner, 2022*)
-
-### Scenarii concrete
-
-**Echipa noua pe un proiect legacy.** O companie preia un proiect de 5 ani cu 200,000 de linii de Java. Nu exista diagrame. Developerii petrec 2–3 saptamani doar cartografiind mental dependentele intre servicii inainte de a putea face prima modificare semnificativa. Cu ArchiGen AI, acest proces se reduce la minute: sistemul parseaza intregul proiect si genereaza automat o diagrama de componente cu toate dependentele.
-
-**Code review fara context arhitectural.** Un developer propune o modificare intr-un microserviciu. Reviewerul nu stie cum interactioneaza acel serviciu cu restul sistemului si aproba un breaking change. Cu o diagrama generata automat din cod, contextul arhitectural e vizibil instant.
-
-**Sprint planning cu arhitectura necunoscuta.** O echipa estimeaza un task de refactoring la 2 zile. Dupa ce incep lucrul descopera dependente ascunse si task-ul dureaza 2 saptamani. Diagramele generate din cod ar fi expus aceste dependente inainte de estimare.
-
-**Audit de securitate.** Un auditor extern are nevoie de o vedere de ansamblu a sistemului. In mod traditional, arhitectul petrece 1–2 zile pregatind documentatie vizuala. ArchiGen AI genereaza aceasta vedere in secunde direct din codul sursa.
-
-### De ce solutiile existente nu rezolva problema
-
-Tool-urile de diagrame manuale (Lucidchart, draw.io, PlantUML scris manual) cer efort constant si devin imediat outdated. Tool-urile de documentare automata (Javadoc, Sphinx) genereaza text, nu vizualizare arhitecturala. IDE-urile ofera vizualizari limitate la nivelul unui singur fisier sau clasa. **ArchiGen AI** este primul pas catre o solutie end-to-end care derive automat reprezentarea arhitecturala din cod sursa real, mentinandu-se sincronizata cu evolutia proiectului.
+- Tree-sitter ingestion for Java and Python (`src/ingestion/`)
+- Dependency graph construction and relationship extraction (`src/graph/`)
+- Four diagram exporters: PlantUML, Mermaid, Structurizr DSL, Graphviz DOT (`src/exporters/`)
+- Prompt templates and per-notation rule sets for all four formats (`src/prompts/`)
+- Deterministic dataset builder with round-trip validation (`scripts/build_dataset.py`)
+- QLoRA fine-tuning script (`scripts/train.py`)
+- Optional LLM enrichment with graceful fallback (`src/ai/`, `src/llm/`)
+- ChromaDB retrieval layer: canonical-AST conversion, sentence-transformer embeddings, persistent store, and metadata-filtered query (`src/rag/`)
+- FastAPI backend (`src/api/`) — `GET /health`, `POST /generate`, `GET /history`
 
 ---
 
-## Solutia propusa
+## The problem
 
-Sistemul combina trei tehnici complementare:
+Architecture documentation is one of the most consistently neglected parts of the software lifecycle, and the reason is structural rather than cultural: producing diagrams by hand is repetitive, and the result starts decaying the moment the code changes. Teams are then left choosing between maintaining diagrams manually or having documentation that quietly contradicts the system.
 
-**Analiza statica AST** — codul sursa Python si Java este parsat cu tree-sitter pentru a extrage clase, interfete, metode, campuri, relatii de mostenire, implementare si dependente. Aceasta reprezentare structurala este mai precisa si mai stabila decat interpretarea LLM directa a codului.
+The usual alternatives each miss part of the problem:
 
-**Retrieval-Augmented Generation (RAG)** — un vectorstore cu 380 de perechi (descriere → DSL) indexate semantic cu ChromaDB. La fiecare cerere, sistemul cauta cele mai similare exemple din baza de cunostinte si le foloseste ca context pentru generare, garantand respectarea tiparelor de sintaxa intalnite in date reale.
+- **Manual diagram tools** (draw.io, Lucidchart, hand-written PlantUML) produce good output but require sustained manual effort, so they fall out of date.
+- **Documentation generators** (Javadoc, Sphinx) produce prose, not an architectural view.
+- **IDE visualisations** generally stop at the level of a single file or class, showing structure without system-level relationships.
 
-**Fine-tuning QLoRA pe StarCoder2-3B** — modelul de baza a fost specializat pe datele colectate, invatand sa genereze sintaxa DSL corecta pornind direct din text sau cod sursa. QLoRA permite antrenarea unui model de 3 miliarde de parametri pe hardware accesibil prin cuantizare 4-bit si adaptori LoRA cu rang redus.
-
-Cele trei mecanisme sunt combinate intr-un pipeline care include postprocesare a output-ului generat si validare sintactica a diagramei inainte de returnare.
-
----
-
-## Arhitectura sistemului
-
-![Arhitectura ArchiGen AI](projects-seekdeepteam-update-kreje/docs/architecture.svg)
-
-Fluxul principal al sistemului:
-
-1. Utilizatorul trimite input prin interfata web (text liber, user story, cod sursa sau folder intreg)
-2. Daca input-ul este cod sursa, tree-sitter parseaza AST-ul si extrage clase, functii si relatii dintre componente
-3. Reprezentarea structurala este imbogatita cu contextul semantic generat de modelul local (Ollama)
-4. RAG retriever interogheaza ChromaDB si returneaza exemplele cele mai similare semantic ca si context
-5. Modelul antrenat genereaza DSL-ul, folosind contextul RAG si descrierea/codul primit
-6. Postprocessorul curata output-ul (elimina hallucinations, balaseaza braces, adauga wrappers lipsa)
-7. Validatorul verifica sintaxa si raporteaza eventualele erori
-8. Rezultatul este returnat clientului si randat vizual in interfata
+What is missing is a path that derives the architectural view from the code itself, so it can be regenerated whenever the code changes and cannot drift out of sync.
 
 ---
 
-## Tehnologii folosite
+## How it works
 
-| Componenta | Tehnologie |
-|---|---|
-| Server API | FastAPI, Uvicorn |
-| Interfata desktop | Streamlit |
-| Model de baza | StarCoder2-3B (BigCode) |
-| Fine-tuning | PEFT / QLoRA, BitsAndBytes 4-bit NF4 |
-| Model local AI | Ollama (phi3:mini implicit) |
-| Embeddings RAG | SentenceTransformers — all-mpnet-base-v2 / all-MiniLM-L6-v2 |
-| Vectorstore | ChromaDB (persistent) |
-| Parsare cod | tree-sitter, tree-sitter-java, tree-sitter-python |
-| Graf dependente | NetworkX |
-| Randare diagrame | Mermaid.js (browser-side) |
-| Export modele | Gaphor (.gaphor), Mermaid, PlantUML, Structurizr DSL, Graphviz |
-| Interfata web | Carbon Design System (IBM), HTML/CSS/JS |
-| Limbaj | Python 3.12 |
+### Path A — source code to diagram (static)
 
----
+No model is involved. Source files are parsed with tree-sitter, and the resulting structures are loaded into a directed graph:
 
-## Structura proiectului
+1. **Traversal** — `src/ingestion/file_traverser.py` walks the directory recursively, filtered by extension (`.java`, `.py` by default) and an ignore list (`.git`, `node_modules`, `target`, `build`, …).
+2. **Parsing** — `src/ingestion/parser.py` builds concrete syntax trees and extracts classes, interfaces, methods, fields, inheritance, implementations, and package/import information.
+3. **Graph construction** — `src/graph/builder.py` produces a `networkx.DiGraph`; `src/graph/relationships.py` resolves and types the edges (`inherits`, `implements`, `composes`, `depends`, `calls`, …).
+4. **Optional enrichment** — `src/ai/` asks an LLM to name architectural contexts and summarise responsibilities. Entirely optional: if no client is configured or the call fails, nodes fall back to `"Default Package"` and export proceeds normally.
+5. **Export** — `src/exporters/` renders PlantUML, Mermaid, Structurizr DSL, or Graphviz DOT.
 
+Every step is deterministic and sorted, so the same repository produces byte-identical output on every run.
+
+### Path B — description to diagram (generative)
+
+A prose description has no ground truth to extract, so this path generates DSL source with a fine-tuned model:
+
+1. The description is embedded and used to query the ChromaDB knowledge base for similar patterns, optionally filtered by notation (`query_knowledge_base(query, filter_meta={"format": ...})`).
+2. The description and any retrieved context are formatted with the prompt template for the target notation (`src/prompts/prompt_templates.py`).
+3. The model generates DSL source.
+
+### Pipeline
+
+```mermaid
+flowchart TD
+    A[Input] --> B{Input kind}
+
+    B -->|Source code| C[file_traverser]
+    C --> D["parser: tree-sitter AST"]
+    D --> E["graph/builder + relationships"]
+    E --> F[NetworkX DiGraph]
+    F --> G[Optional LLM enrichment]
+    G --> H[Exporters]
+
+    B -->|Description| I[prompt_templates]
+    I --> J["StarCoder2-3B + QLoRA adapter"]
+    J --> H
+
+    H --> K["PlantUML / Mermaid / Structurizr / Graphviz"]
+    K --> L["Frontend: diagram viewer + DSL view"]
 ```
-projects-seekdeepteam-update-kreje/
+
+---
+
+## Repository layout
+
+```text
+UML_Diagram_Generator/
 ├── src/
-│   ├── api/
-│   │   ├── main.py                  # FastAPI — endpoint-uri REST
-│   │   ├── schemas.py               # Modele Pydantic request/response
-│   │   └── static/index.html        # Interfata web
-│   ├── ai/
-│   │   ├── ollama_client.py         # Client HTTP pentru Ollama local
-│   │   ├── semantic_grouper.py      # Grupare semantica a nodurilor grafului
-│   │   ├── summarizer.py            # Generare rezumate per componenta
-│   │   └── text_to_diagram.py       # Pipeline text/user-story → graf arhitectural
-│   ├── data/
-│   │   └── augment.py               # Generare date sintetice suplimentare
-│   ├── evaluation/
-│   │   ├── evaluate.py              # Evaluare comparativa (BLEU, F1)
-│   │   └── run_eval.py              # Validare sintaxa pe test split
-│   ├── exporters/
-│   │   ├── mermaid_exporter.py      # Export graf → Mermaid DSL
-│   │   ├── plantuml_exporter.py     # Export graf → PlantUML
-│   │   ├── structurizr_exporter.py  # Export graf → Structurizr DSL
-│   │   └── graphviz_exporter.py     # Export graf → Graphviz DOT
-│   ├── generators/
-│   │   ├── postprocessor.py         # Curatare output DSL
-│   │   └── validator.py             # Validare sintaxa Mermaid/PlantUML/Structurizr
-│   ├── gaphor_gen/
-│   │   └── model_builder.py         # Constructie si export model Gaphor
-│   ├── graph/
-│   │   ├── builder.py               # Constructie graf NetworkX din metadata AST
-│   │   └── relationships.py         # Extractie muchii de dependenta
-│   ├── ingestion/
-│   │   ├── file_traverser.py        # Traversare recursiva a repository-ului
-│   │   └── parser.py                # Parsare AST cu tree-sitter (Java + Python)
-│   ├── models/
-│   │   ├── train.py                 # Fine-tuning QLoRA
-│   │   └── inference.py             # Inferenta cu modelul antrenat
-│   ├── rag/
-│   │   ├── pipeline.py              # Pipeline complet RAG + generare
-│   │   ├── indexer.py               # Indexare perechi in ChromaDB
-│   │   └── retriever.py             # Retrieval semantic cu filtrare pe format
-│   ├── static_analysis/
-│   │   ├── ast_parser.py            # Parsare AST cu tree-sitter
-│   │   └── dependency_graph.py      # Constructie graf de dependente
-│   └── build_pairs.py               # Constructie dataset perechi (input, DSL)
-├── data/
-│   ├── raw/                         # Date brute colectate (JSONL)
-│   │   ├── mermaid/
-│   │   ├── plantuml/
-│   │   └── structurizr/
-│   ├── processed/
-│   │   └── dataset_v2.jsonl         # Dataset final (380 perechi)
-│   └── stats/                       # Rapoarte EDA si evaluare
-├── models/
-│   └── starcoder2-3b-lora/          # Adapter LoRA antrenat
-│       ├── adapter_config.json
-│       └── adapter_model.safetensors
-├── docs/
-│   └── architecture.svg
-└── notebooks/
-    ├── 01_data_collection.ipynb
-    └── 02_eda_statistics.ipynb
+│   ├── api/                  FastAPI backend: /health, /generate, /history
+│   ├── ai/                   Optional LLM enrichment: context naming, summaries
+│   ├── dataset/              PlantUML parsing + graph similarity (round-trip validation)
+│   ├── evaluation/           Static-vs-LLM comparison metrics
+│   ├── exporters/            PlantUML, Mermaid, Structurizr, Graphviz DOT
+│   ├── generation/           LLM-backed diagram generation
+│   ├── git_integration/      Git hook runner + merge-request comments
+│   ├── graph/                NetworkX graph builder + edge extraction
+│   ├── ingestion/            Recursive traversal + tree-sitter parsing (Java, Python)
+│   ├── llm/                  LLM client (OpenAI-compatible) + factory with lazy imports
+│   ├── prompts/              Prompt templates + notation rules per format
+│   ├── rag/                  ChromaDB vector store: AST conversion, embeddings, filtered query, seeding
+│   ├── schemas/              Pydantic models
+│   └── config.py             Environment-driven settings
+├── scripts/
+│   ├── download_model.py     Fetch + verify the base model from the Hub
+│   ├── build_dataset.py      Deterministic dataset builder (label factory)
+│   └── train.py              QLoRA supervised fine-tuning
+├── frontend/                 Vue 3 + Vite + IBM Carbon
+│   └── src/{components,api,composables,styles}
+├── data/                     train.jsonl, val.jsonl
+├── models/                   LoRA adapter output directory
+├── plans/                    Design notes
+└── requirements.txt
 ```
+
+`repos/` holds the open-source repositories the dataset is built from. It is a local working directory and should not be committed — see [Licensing](#licensing-and-acknowledgements).
 
 ---
 
-## Etapa 1 — Colectarea si analiza datelor
+## Quick start
 
-Unul dintre cele mai critice aspecte ale proiectului l-a constituit construirea unui dataset de calitate pentru antrenamentul modelului. Nu exista un corpus public dedicat perechilor (cod sursa / descriere textuala → DSL arhitectural), ceea ce a facut colectarea manuala si semi-automata necesara.
-
-### Surse de date
-
-Datele brute au fost colectate din surse publice diverse, pentru a asigura diversitatea stilurilor de diagrame si a tipurilor de sisteme descrise:
-
-- **GitHub** — repository-uri publice care contin fisiere `.mmd`, `.puml`, `.dsl` sau diagrame inline in README-uri; cautarile au vizat proiecte cu stele (indicator de calitate) si diagrame nontriviale
-- **MermaidSeqBench** — benchmark public de diagrame de secventa Mermaid, utilizat in cercetarea academica pentru evaluarea modelelor de cod; furnizeaza diagrame validate sintactic
-- **CodeSearchNet** — corpus de cod sursa Python si Java cu docstring-uri asociate, folosit pentru constructia perechilor de tip `code → DSL`
-- **Structurizr examples** — exemple din documentatia oficiala a limbajului Structurizr DSL, reprezentand sisteme reale din industrie descrise la nivel C4
-
-In total, au fost colectate aproximativ **2000 de fisiere DSL brute** inainte de filtrare.
-
-### Filtrare si curatare
-
-Calitatea datelor brute a variat semnificativ. Procesul de curatare a eliminat peste 80% din fisierele initiale, pastrandu-le doar pe cele cu valoare reala de antrenament:
-
-```
-Criterii de eliminare:
-  - Fisiere cu caractere CJK (chinez, japonez, coreean) in DSL
-  - DSL-uri sub 50 de caractere (prea simple, fara valoare de invatare)
-  - DSL-uri peste 5000 de caractere (prea lungi pentru fereastra de context)
-  - Diagrame fara header valid (ex: Mermaid fara "graph", "flowchart" etc.)
-  - Duplicate detectate prin hash de continut (MD5)
-  - DSL-uri cu braces nebalansate (diferenta absoluta mai mare de 3)
-  - Fisiere generate automat (lipsa de variatie semantica)
-  - Diagrame fara continut semantic real (ex: diagrame cu un singur nod)
-```
-
-### Constructia perechilor (input → DSL)
-
-Fisierul `build_pairs.py` construieste perechile de antrenament prin doua strategii complementare:
-
-**Perechi semantice** — cod sursa dintr-un proiect real, asociat cu cel mai similar DSL din colectie pe baza de cosine similarity pe embeddings. Aceasta abordare capteaza relatia directa dintre structura codului si reprezentarea arhitecturala. Similaritatea minima acceptata a fost fixata la 0.65 pentru a evita perechile false.
-
-**Perechi sintetice** — descrieri in limbaj natural generate programatic (template-uri parametrizate cu componente reale extrase din proiecte), asociate cu DSL-uri curate din colectie. Aceasta tehnica de data augmentation extinde diversitatea dataset-ului cu ~40% fara a necesita adnotare manuala.
-
-### Analiza exploratorie (EDA)
-
-Inainte de antrenament, datasetul a fost analizat in detaliu in `notebooks/02_eda_statistics.ipynb`. Analiza a urmarit mai multe dimensiuni:
-
-**Distributia lungimilor** — input-urile au o medie de 187 de tokeni (σ=94), iar output-urile DSL au o medie de 312 tokeni (σ=201). Distributia este asimetrica la dreapta, cu un subset de diagrame complexe (>1000 tokeni output) care a necesitat tratament special in faza de antrenament.
-
-**Calitatea sintactica** — rata de validitate sintactica per format inainte de curatare: Mermaid 71%, PlantUML 68%, Structurizr 82%. Dupa filtrare, toate formatele au atins o rata de validitate de 100% in dataset-ul final.
-
-**Complexitatea codului sursa** — pentru perechile de tip cod→DSL, a fost calculata complexitatea ciclomatica medie (7.3), numarul mediu de clase (4.1) si adancimea medie a ierarhiei de mostenire (2.2). Aceste metrici au fost folosite pentru stratificarea split-ului de antrenament.
-
-**Acoperirea tipurilor de diagrame** — analiza a evidentiat un dezechilibru semnificativ: diagramele flowchart reprezentau initial 62% din dataset. Procesul de augmentare a echilibrat partial distributia, reducand dominanta la 35%.
-
-**Distributia finala dupa tipul de diagrama:**
-
-```
-flowchart      132  ████████████████████████████
-sequence        85  █████████████████
-context         85  █████████████████
-container       31  ██████
-class           15  ███
-er               7  █
-component        5  █
-state            4  █
-```
-
-### Statistici dataset final
-
-| Metric | Valoare |
-|---|---|
-| Total perechi | 380 |
-| Mermaid | 194 (51%) |
-| Structurizr | 128 (34%) |
-| PlantUML | 58 (15%) |
-| Split antrenament | 264 (70%) |
-| Split validare | 56 (15%) |
-| Split test | 60 (15%) |
-| Lungime medie input | 187 tokeni |
-| Lungime medie output | 312 tokeni |
-| Rata validitate sintactica | 100% |
-
----
-
-## Etapa 2 — Antrenamentul modelului
-
-### Alegerea modelului de baza
-
-StarCoder2-3B este un model de limbaj specializat pe cod, antrenat de BigCode pe peste 600 de limbaje de programare. A fost ales pentru:
-
-- Dimensiunea sa moderata (3 miliarde de parametri) — incape pe GPU-uri de consum
-- Cunoasterea extinsa a sintaxei structurate (cod, DSL, markup)
-- Licenta permisiva (BigCode OpenRAIL-M)
-- Performanta superioara fata de modele generale de aceeasi dimensiune pe sarcini de generare de cod
-
-### Strategia de fine-tuning: QLoRA
-
-Antrenamentul direct al unui model de 3B parametri necesita zeci de GB de VRAM. QLoRA (Quantized LoRA) rezolva aceasta problema prin doua mecanisme:
-
-1. **Cuantizare 4-bit** — modelul de baza este incarcat in precizie NF4, reducand memoria necesara de aproximativ 4 ori
-2. **LoRA (Low-Rank Adaptation)** — in loc sa fie modificati toti parametrii, se adauga matrice de rang mic (r=16) care captureaza adaptarile specifice domeniului
-
-Parametrii LoRA reprezinta sub 1% din totalul parametrilor modelului, dar sunt suficienti pentru a specializa comportamentul pe generarea de DSL arhitectural.
-
-### Configuratia
-
-```json
-{
-  "base_model": "bigcode/starcoder2-3b",
-  "r": 16,
-  "lora_alpha": 32,
-  "lora_dropout": 0.05,
-  "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
-  "quantization": "4-bit NF4",
-  "compute_dtype": "float16"
-}
-```
-
-### Parametri de antrenament
-
-| Parametru | Valoare |
-|---|---|
-| Epoci | 3 |
-| Learning rate | 2e-4 |
-| Batch size per device | 4 |
-| Gradient accumulation | 8 pasi |
-| Warmup steps | 100 |
-| Optimizer | AdamW |
-| Precizie calcul | fp16 |
-
-### Formatul promptului
-
-Modelul a fost antrenat sa completeze prompturi structurate:
-
-```
-### Input (mermaid):
-O platforma e-commerce cu servicii: Auth, Payment, Notification.
-Toate comunica prin RabbitMQ si partajeaza PostgreSQL.
-
-### Context:
-[exemple RAG similare]
-
-### Output (mermaid):
-flowchart LR
-    Client --> AuthService
-    ...
-```
-
----
-
-## Etapa 2 — Pipeline RAG
-
-### Indexarea
-
-La prima rulare, `src/rag/indexer.py` citeste `dataset_v2.jsonl`, genereaza embeddings pentru fiecare `input_text` cu modelul `all-mpnet-base-v2` (768 dimensiuni) si le stocheaza in ChromaDB:
+Requires Python 3.10+ (developed against 3.14).
 
 ```bash
-python -m src.rag.indexer
+git clone <this-repo>
+cd UML_Diagram_Generator
+
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-### Retrieval cu filtrare pe format
+Start the API:
 
-La generare, query-ul utilizatorului este encodat cu acelasi model de embeddings si sistemul cauta cele mai apropiate `top_k` exemple prin similaritate cosinus. Filtrarea pe format garanteaza ca exemplele returnate sunt in acelasi DSL cerut:
+```bash
+uvicorn src.api.main:app --reload --port 8000
+```
+
+Then, in `frontend/`:
+
+```bash
+npm install
+npm run dev          # http://localhost:5173
+```
+
+The Vite dev server proxies `/api/*` to port 8000 and strips the prefix, so no environment configuration is needed. To run the UI with no backend at all, set `VITE_USE_MOCK=true`.
+
+`POST /generate` accepts `{mode, content, diagram_type, format, use_ai, use_rag}`, where `mode` is `text`, `story`, `code` (a pasted snippet) or `folder` (a local directory path). Interactive API docs are at `http://localhost:8000/docs`.
+
+### LLM configuration
+
+The `text` and `story` modes need an LLM. Copy `.env.example` to `.env` and set:
+
+```bash
+LLM_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+```
+
+`LLM_BASE_URL` defaults to OpenAI. Point it at any OpenAI-compatible endpoint — a local vLLM or Ollama server, for example — to keep inference on-machine, in which case an API key is optional. The `folder` and `code` modes need no key at all: they run entirely on static analysis.
+
+---
+
+## Fine-tuning
+
+### Model
+
+**StarCoder2-3B** (BigCode) — a 3B code-specialised model. Chosen for its size (fits a consumer GPU under 4-bit quantisation), its prior over structured text, and its permissive licence.
+
+### Method: QLoRA
+
+Training a 3B model directly needs tens of GB of VRAM. QLoRA reduces this on two axes:
+
+- **4-bit NF4 quantisation** of the frozen base weights (~4x memory reduction)
+- **LoRA adapters** — small low-rank matrices trained instead of the full weights
+
+The adapter is well under 1% of total parameters.
+
+### Configuration
 
 ```python
-where_filter = {"format": {"$eq": target_format}}
+# scripts/train.py
+BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                   bnb_4bit_compute_dtype=torch.bfloat16)
 
-results = self.collection.query(
-    query_embeddings=query_emb,
-    n_results=top_k,
-    where=where_filter,
-)
+LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05,
+           target_modules="all-linear", task_type="CAUSAL_LM")
 ```
 
-### Analiza statica pentru input de tip cod
+### Training hyperparameters
 
-Cand input-ul este cod sursa, sistemul nu il trimite direct la model — il analizeaza mai intai cu tree-sitter pentru a extrage o reprezentare structurala:
+| Parameter | Value |
+|---|---|
+| Base model | `bigcode/starcoder2-3b` |
+| Quantisation | 4-bit NF4, bf16 compute |
+| LoRA rank / alpha / dropout | 16 / 32 / 0.05 |
+| LoRA target modules | `all-linear` |
+| Epochs | 2 |
+| Learning rate | 2e-4, cosine schedule |
+| Warmup | 20 steps |
+| Train batch size per device | 2 |
+| Eval batch size per device | 2 |
+| Gradient accumulation | 8 (effective batch 16) |
+| Max sequence length | 2,048 tokens |
+| Loss | Completion tokens only |
+| Gradient checkpointing | Enabled |
+| Precision | bf16 |
+| Eval / save interval | every 25 steps |
+| Seed | 42 |
+| Steps per epoch | 97 (194 total) |
 
-- Clase si interfete identificate
-- Functii si metode
-- Relatii de dependenta intre componente
-- Rezumat textual auto-generat (ex: "PYTHON code with 5 functions, 2 classes, 7 calls")
+Hardware: a single consumer GPU with 8 GB VRAM (RTX 4060 Laptop); training peaks around 4.6 GB. Evaluation is deliberately run at a **smaller batch size than training** — it has no backward pass, so gradient checkpointing does not reduce its activation memory, and the library default of 8 exhausts 8 GB. Saving is step-based rather than epoch-based because the Trainer evaluates before it saves, so an evaluation failure would otherwise discard a whole epoch.
 
-Aceasta reprezentare imbogatita produce o interogare RAG mai precisa si un prompt mai informativ pentru model.
+### Running
 
-### RAG-only mode
+```bash
+python scripts/download_model.py                                     # ~11 GB, into the HF cache
+python scripts/build_dataset.py ./repos/* --out data | tee build.log
+python -u scripts/train.py --data data --out models/starcoder2-3b-lora 2>&1 | tee train.log
+```
 
-Cand modelul antrenat nu este disponibil, sistemul functioneaza in mod RAG-only: returneaza cel mai similar exemplu din baza de cunostinte ca template direct. Acest mod nu necesita GPU si are latenta foarte mica.
+`download_model.py` prints the resolved snapshot path and verifies every weight shard's safetensors header, so a truncated download is caught before training starts. It is resumable, and `--list` shows what would be fetched without downloading anything.
+
+Use `python -u`: the Trainer writes progress to stdout, which is block-buffered when piped, so without it loss values lag behind the progress bar by up to a buffer's worth of steps.
 
 ---
 
-## Etapa 2 — API si interfata
+## Evaluation
 
-### Endpoint-uri REST
+| Metric | Definition |
+|---|---|
+| **Validity rate** | Fraction of generated diagrams that parse successfully |
+| **Entity precision / recall / F1** | Recovered types vs. ground truth |
+| **Edge precision / recall / F1** | Recovered relationships vs. ground truth |
+| **Relationship type accuracy** | Correct edge type among correctly identified edges |
+| **Context overlap** | Agreement between package grouping and model-suggested contexts |
 
-| Endpoint | Metoda | Descriere |
-|---|---|---|
-| `/` | GET | Serveste interfata web |
-| `/generate` | POST | Genereaza diagrama din text sau cod |
-| `/health` | GET | Status sistem (model, RAG, CUDA) |
-| `/history` | GET | Ultimele N generari |
+These are the metrics that matter for this task, and they are deliberately not loss-based. Per-token accuracy and loss both look excellent long before output is *usable*: a 200-token diagram generated at 99% per-token accuracy is still only correct end-to-end about 13% of the time (`0.99^200 ~= 0.13`), because a single malformed token invalidates the whole diagram. Validity rate is the honest measure.
 
-### Moduri de input
-
-**Natural Language** — utilizatorul descrie sistemul in proza libera sau sub forma de user stories
-
-**Code** — utilizatorul lipeste cod Python sau Java; sistemul il analizeaza AST si genereaza diagrama corespunzatoare
-
-**Folder** — utilizatorul selecteaza un folder local; sistemul traverseaza recursiv fisierele `.py` si `.java` si le trimite combinate la pipeline
-
-### Formate de output
-
-Mermaid, PlantUML, Structurizr DSL si Graphviz DOT, cu tipuri de diagrama selectabile: flowchart, class diagram, sequence diagram, ER diagram, component diagram, deployment diagram, state diagram. Suplimentar, sistemul poate exporta modele native `.gaphor` pentru editare vizuala ulterioara in Gaphor.
+`src/evaluation/comparator.py` contains the static-vs-LLM comparison functions (`compare_entity_detection`, `compare_relationship_detection`, `compare_context_quality`) that the harness will build on.
 
 ---
 
-## Evaluare
+## Tech stack
 
-Scriptul `src/evaluation/run_eval.py` ruleaza validarea pe setul de test (60 exemple) si salveaza raportul in `data/stats/eval_report_v2.json`:
-
-```bash
-cd projects-seekdeepteam-update-kreje
-python -m src.evaluation.run_eval
-```
-
-Metrici calculate:
-- **Validity rate** — procentul de diagrame cu sintaxa corecta per format
-- **BLEU score** — overlap lexical intre input si DSL generat
-- **Error breakdown** — distributia tipurilor de erori
+| Component | Technology |
+|---|---|
+| Code parsing | tree-sitter, tree-sitter-java, tree-sitter-python |
+| Dependency graph | NetworkX |
+| Fine-tuning | PEFT (LoRA), bitsandbytes 4-bit NF4, TRL `SFTTrainer` |
+| Base model | StarCoder2-3B (BigCode) |
+| LLM client | OpenAI-compatible Responses API (`src/llm/`) |
+| API server | FastAPI, Uvicorn |
+| Diagram output | PlantUML (primary), Mermaid, Structurizr DSL, Graphviz DOT |
+| Frontend | Vue 3, Vite, IBM Carbon Design System, Mermaid.js |
+| Data processing | pandas |
+| Language | Python 3.14 (development), 3.10+ supported |
 
 ---
 
-## Rulare locala
+## Known limitations
 
-```bash
-# 1. Instaleaza dependentele
-setup.bat
+- **Enrichment requires an API key.** The optional context/summary step needs a configured LLM client. Without one it silently falls back to `"Default Package"`, which is safe but produces less informative diagrams.
+- **Generation history is in-memory.** `GET /history` keeps the last 50 generations inside the running process; restarting the server clears them and nothing is written to disk.
+- **`code` mode infers the language.** A pasted snippet is written to a temporary file and parsed as Java if it contains explicit Java markers, otherwise as Python. The guess is reported in the response `warnings`.
+- **Static path only handles Java and Python.** Other languages need additional tree-sitter grammars and extraction rules.
+- **Overlapping modules.** `src/evaluation/comparator.py` implements a static-vs-LLM benchmark whose surrounding exploratory code is dead; only its metric functions are intended to survive.
 
-# 2. Indexeaza vectorstore-ul (prima rulare)
-cd projects-seekdeepteam-update-kreje
-..\venv\Scripts\python -m src.rag.indexer
+---
 
-# 3. Porneste serverul API
-..\venv\Scripts\python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+## Licensing and acknowledgements
 
-# 4. (alternativ) Interfata desktop Streamlit
-..\venv\Scripts\streamlit run src/desktop_app.py
-```
+The project's own source code is released under the **MIT licence** — see [`LICENSE`](LICENSE).
 
-Deschide `http://localhost:8000` in browser pentru interfata web, sau `http://localhost:8501` pentru interfata Streamlit.
+Two things to check before redistributing the data this project derives:
 
-### Configurare
+- **The training corpus is derived from third-party open-source repositories.** `repos/` holds local clones and `data/*.jsonl` holds diagrams derived from them. Licences vary (MIT, Apache-2.0, BSD, and others) and **must be verified before redistributing** `data/` or `models/`.
+- **`repos/` and `data/` should not be committed.** They are large and third-party. See `.gitignore`.
 
-Copiaza `.env.example` in `.env` si ajusteaza dupa nevoie:
-
-```bash
-# Model Ollama folosit pentru imbogatire semantica
-OLLAMA_MODEL=phi3:mini
-
-# Activeaza RAG (necesita indexare prealabila)
-ENABLE_RAG=false
-
-# Extensii suportate pentru parsare
-SUPPORTED_EXTENSIONS=java,py
-```
+Built on the work of the [tree-sitter](https://tree-sitter.github.io/) project, [BigCode](https://github.com/bigcode-project) (StarCoder2), [TRL](https://github.com/huggingface/trl), [PEFT](https://github.com/huggingface/peft), and [IBM Carbon](https://carbondesignsystem.com/).

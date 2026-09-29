@@ -1,12 +1,3 @@
-"""
-Merge Request / Pull Request integration for architecture diagrams.
-
-Generates diagram diffs (textual) and posts them as comments on
-GitHub PRs or GitLab MRs when code changes affect the architecture.
-
-Also supports generating a standalone MR description with embedded
-Mermaid diagrams for rendering directly in the PR/MR UI.
-"""
 import json
 import os
 import tempfile

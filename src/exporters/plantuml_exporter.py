@@ -80,7 +80,10 @@ def to_plantuml(graph: nx.DiGraph, title: str = "Architecture Diagram") -> str:
         lines.append("")
 
     # Emit relationships
-    for src, dst, edata in graph.edges(data=True):
+    # sorted so output is reproducible regardless of graph insertion order
+    for src, dst, edata in sorted(
+        graph.edges(data=True), key=lambda e: (str(e[0]), str(e[1]))
+    ):
         edge_type = edata.get("edge_type", "dependency")
         arrow = PUML_RELATION_MAP.get(edge_type, " --> ")
         src_safe = _sanitise(str(graph.nodes[src].get("name", src)))

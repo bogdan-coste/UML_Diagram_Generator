@@ -1,23 +1,9 @@
-"""
-Text-to-Diagram Pipeline: parse natural language descriptions and user
-stories, extract architectural concepts via the SLM, and produce
-enriched graphs ready for multi-format export.
-
-Supports:
-  - Free-text architecture descriptions
-  - User stories ("As a ... I want ... so that ...")
-  - Bullet-point system descriptions
-"""
 from typing import Any, Dict, List, Optional
 
 import networkx as nx
 
-from src.ai.ollama_client import query_ollama
+from src.llm.factory import build_llm_client
 
-
-# ---------------------------------------------------------------------------
-# Prompt templates
-# ---------------------------------------------------------------------------
 EXTRACT_ENTITIES_PROMPT = """\
 You are an expert software architect. Given the following description of a system,
 extract ALL structural elements as a JSON object.
@@ -82,19 +68,14 @@ EXPECTED JSON FORMAT:
 }}
 """
 
-# ---------------------------------------------------------------------------
-# JSON extraction / parsing
-# ---------------------------------------------------------------------------
 import json
 import re
 
-
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json(text: str) -> dict[str, Any] | None:
     """Robustly extract a JSON object from SLM output (may have markdown)."""
     if not text:
         return None
 
-    # Remove markdown code fences if present
     cleaned = re.sub(r"```(?:json)?\s*", "", text)
     cleaned = cleaned.replace("```", "").strip()
 
@@ -135,10 +116,6 @@ def _normalize_relationship_type(rel_type: str) -> str:
     }
     return mapping.get(rel_type.lower().strip(), "dependency")
 
-
-# ---------------------------------------------------------------------------
-# Graph construction from extracted JSON
-# ---------------------------------------------------------------------------
 def _json_to_graph(data: Dict[str, Any]) -> nx.DiGraph:
     """Convert the extracted JSON into a NetworkX DiGraph."""
     graph = nx.DiGraph()
@@ -168,20 +145,21 @@ def _json_to_graph(data: Dict[str, Any]) -> nx.DiGraph:
                     "params": [p.strip() for p in params_str.split(",") if p.strip()],
                 })
 
-        graph.add_node(node_id, **{
-            "name": ent.get("name", node_id),
-            "type": canonical_type,
-            "context": ent.get("context", "Default Package"),
-            "responsibility": ent.get("description", ""),
-            "methods": methods,
-            "fields": [],
-            "constructor_params": [],
-            "imports": [],
-            "file_path": "",
-            "package": ent.get("context", ""),
-            "superclass": "",
-            "interfaces": [],
-        })
+        graph.add_node(
+            node_id,
+            name=ent.get("name", node_id),
+            type=canonical_type,
+            context=ent.get("context", "Default Package"),
+            responsibility=ent.get("description", ""),
+            methods=methods,
+            fields=[],
+            constructor_params=[],
+            imports=[],
+            file_path="",
+            package=ent.get("context", ""),
+            superclass="",
+            interfaces=[],
+        )
 
     graph.graph["title"] = title
 
@@ -199,17 +177,17 @@ def _json_to_graph(data: Dict[str, Any]) -> nx.DiGraph:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+def _ask_llm(prompt: str) -> Optional[str]:
+    """Send *prompt* through the configured LLM; return None on any failure."""
+    try:
+        return build_llm_client().ask_llm(prompt)
+    except Exception:
+        return None
+
+
 def text_to_graph(description: str) -> Optional[nx.DiGraph]:
-    """Generate an architecture graph from a free-text description via SLM.
-
-    Args:
-        description: Natural language description of the system architecture.
-
-    Returns:
-        A NetworkX DiGraph, or None if SLM failed.
-    """
     prompt = EXTRACT_ENTITIES_PROMPT.format(description=description)
-    response = query_ollama(prompt)
+    response = _ask_llm(prompt)
     if not response:
         return None
 
@@ -221,16 +199,8 @@ def text_to_graph(description: str) -> Optional[nx.DiGraph]:
 
 
 def user_story_to_graph(story: str) -> Optional[nx.DiGraph]:
-    """Generate an architecture graph from a user story via SLM.
-
-    Args:
-        story: A user story in the format "As a ... I want ... so that ..."
-
-    Returns:
-        A NetworkX DiGraph, or None if SLM failed.
-    """
     prompt = USER_STORY_PROMPT.format(story=story)
-    response = query_ollama(prompt)
+    response = _ask_llm(prompt)
     if not response:
         return None
 
@@ -242,10 +212,6 @@ def user_story_to_graph(story: str) -> Optional[nx.DiGraph]:
 
 
 def batch_stories_to_graphs(stories: List[str]) -> List[Dict[str, Any]]:
-    """Process multiple user stories and return their graphs with metadata.
-
-    Each result dict: { "story": str, "graph": nx.DiGraph | None, "error": str | None }
-    """
     results = []
     for story in stories:
         try:
@@ -260,28 +226,29 @@ def batch_stories_to_graphs(stories: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
-def text_to_mermaid(description: str) -> Optional[str]:
-    """One-shot: text description → Mermaid class diagram string."""
-    graph = text_to_graph(description)
-    if graph is None:
+def _generate_diagram(description: str, output_format: str) -> Optional[str]:
+    """Ask the LLM directly for diagram source in *output_format*."""
+    try:
+        from src.generation.diagram_generator import DiagramGeneratorLLM
+
+        generator = DiagramGeneratorLLM(build_llm_client())
+        return generator.generate(
+            description, diagram_type="class", output_format=output_format
+        )
+    except Exception:
         return None
-    from src.exporters.mermaid_exporter import to_mermaid
-    return to_mermaid(graph)
+
+
+def text_to_mermaid(description: str) -> Optional[str]:
+    """One-shot: text description → Mermaid class diagram source."""
+    return _generate_diagram(description, "mermaid")
 
 
 def text_to_plantuml(description: str) -> Optional[str]:
-    """One-shot: text description → PlantUML string."""
-    graph = text_to_graph(description)
-    if graph is None:
-        return None
-    from src.exporters.plantuml_exporter import to_plantuml
-    return to_plantuml(graph)
+    """One-shot: text description → PlantUML source."""
+    return _generate_diagram(description, "plantuml")
 
 
 def text_to_structurizr(description: str) -> Optional[str]:
-    """One-shot: text description → Structurizr DSL string."""
-    graph = text_to_graph(description)
-    if graph is None:
-        return None
-    from src.exporters.structurizr_exporter import to_structurizr_dsl
-    return to_structurizr_dsl(graph)
+    """One-shot: text description → Structurizr DSL source."""
+    return _generate_diagram(description, "structurizr")

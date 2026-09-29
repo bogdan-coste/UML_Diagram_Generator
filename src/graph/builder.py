@@ -1,13 +1,9 @@
-"""
-Build a NetworkX directed graph from parsed source-code metadata.
-"""
-
-from typing import Any, Dict
+from typing import Any
 
 import networkx as nx
 
 
-def _make_node_id(cls: Dict[str, Any]) -> str:
+def _make_node_id(cls: dict[str, Any]) -> str:
     """Build a unique node identifier from a class/interface metadata dict."""
     name = cls.get("name", "Anonymous")
     pkg = cls.get("package", "")
@@ -16,14 +12,7 @@ def _make_node_id(cls: Dict[str, Any]) -> str:
     return name
 
 
-def build_graph(metadata: Dict[str, Any]) -> nx.DiGraph:
-    """
-    Given the metadata dict produced by the ingestion phase, create a
-    NetworkX DiGraph with nodes for every class/interface.
-
-    Each node stores the full metadata dict under the 'data' attribute
-    plus a boolean 'is_interface'.
-    """
+def build_graph(metadata: dict[str, Any]) -> nx.DiGraph:
     graph = nx.DiGraph()
 
     for cls in metadata.get("classes", []):

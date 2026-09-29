@@ -40,7 +40,7 @@ def graph_to_canonical_ast(graph: nx.DiGraph) -> Dict[str, Any]:
     dataset generation, and SLM few-shot prompts.
     """
     entities = []
-    for node_id, data in graph.nodes(data=True):
+    for node_id, data in sorted(graph.nodes(data=True), key=lambda n: str(n[0])):
         entities.append({
             "id": node_id,
             "name": data.get("name", node_id),
@@ -60,7 +60,9 @@ def graph_to_canonical_ast(graph: nx.DiGraph) -> Dict[str, Any]:
         })
 
     relationships = []
-    for src, dst, edata in graph.edges(data=True):
+    for src, dst, edata in sorted(
+        graph.edges(data=True), key=lambda e: (str(e[0]), str(e[1]))
+    ):
         relationships.append({
             "from": src,
             "to": dst,

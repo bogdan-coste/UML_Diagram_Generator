@@ -1,29 +1,20 @@
-"""
-Systematic comparison of Static Analysis vs LLM-based diagram generation.
-
-This module runs both approaches on the same codebase and produces
-quantitative metrics comparing their outputs.
-"""
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import networkx as nx
+
 
 # ---------------------------------------------------------------------------
 # Static analysis pipeline (deterministic, tree-sitter based)
 # ---------------------------------------------------------------------------
-def run_static_analysis_pipeline(repo_root: str) -> Tuple[nx.DiGraph, float]:
-    """Run the tree-sitter static analysis pipeline and return (graph, elapsed_sec).
-
-    This is the deterministic path: ingestion → parse → graph → edges.
-    """
+def run_static_analysis_pipeline(repo_root: str) -> tuple[nx.DiGraph, float]:
     t0 = time.time()
 
-    from src.ingestion.file_traverser import collect_source_files
-    from src.ingestion.parser import parse_all_files
     from src.graph.builder import build_graph
     from src.graph.relationships import extract_edges
+    from src.ingestion.file_traverser import collect_source_files
+    from src.ingestion.parser import parse_all_files
 
     files = collect_source_files(repo_root)
     metadata = parse_all_files(files)
@@ -33,15 +24,10 @@ def run_static_analysis_pipeline(repo_root: str) -> Tuple[nx.DiGraph, float]:
     elapsed = time.time() - t0
     return graph, elapsed
 
-
 # ---------------------------------------------------------------------------
-# LLM-based pipeline (semantic interpretation, Ollama SLM)
+# LLM-based pipeline (semantic interpretation)
 # ---------------------------------------------------------------------------
-def run_llm_pipeline(repo_root: str) -> Tuple[Optional[nx.DiGraph], float]:
-    """Run the LLM-based pipeline: static analysis + AI enrichment.
-
-    Returns (enriched_graph, elapsed_sec). Returns None if SLM is unavailable.
-    """
+def run_llm_pipeline(repo_root: str) -> tuple[nx.DiGraph | None, float]:
     t0 = time.time()
 
     graph, static_elapsed = run_static_analysis_pipeline(repo_root)
@@ -59,7 +45,7 @@ def run_llm_pipeline(repo_root: str) -> Tuple[Optional[nx.DiGraph], float]:
     return graph, elapsed
 
 
-def run_text_to_diagram_pipeline(description: str) -> Tuple[Optional[nx.DiGraph], float]:
+def run_text_to_diagram_pipeline(description: str) -> tuple[nx.DiGraph | None, float]:
     """Run text-to-diagram via SLM and return (graph, elapsed_sec)."""
     t0 = time.time()
 
@@ -69,21 +55,13 @@ def run_text_to_diagram_pipeline(description: str) -> Tuple[Optional[nx.DiGraph]
     elapsed = time.time() - t0
     return graph, elapsed
 
-
 # ---------------------------------------------------------------------------
 # Comparison metrics
 # ---------------------------------------------------------------------------
 def compare_entity_detection(
     static_graph: nx.DiGraph,
-    llm_graph: Optional[nx.DiGraph],
-) -> Dict[str, Any]:
-    """Compare entity (node) detection between static and LLM approaches.
-
-    Assumes static analysis is the ground truth for entity detection
-    (tree-sitter is deterministic and accurate for structural parsing).
-
-    Returns precision, recall, F1 of LLM against static analysis baseline.
-    """
+    llm_graph: nx.DiGraph | None,
+) -> dict[str, Any]:
     static_nodes: set[str] = set(static_graph.nodes())
     static_names: set[str] = {
         static_graph.nodes[n].get("name", n) for n in static_nodes
@@ -101,7 +79,6 @@ def compare_entity_detection(
         llm_graph.nodes[n].get("name", n) for n in llm_nodes
     }
 
-    # Match by simple name (LLM may not produce FQN)
     matched = static_names & llm_names
     precision = len(matched) / max(len(llm_names), 1)
     recall = len(matched) / max(len(static_names), 1)
@@ -119,16 +96,12 @@ def compare_entity_detection(
         "missing_entities_llm": sorted(static_names - llm_names),
     }
 
-
 def compare_relationship_detection(
     static_graph: nx.DiGraph,
-    llm_graph: Optional[nx.DiGraph],
-) -> Dict[str, Any]:
-    """Compare relationship (edge) detection accuracy.
+    llm_graph: nx.DiGraph | None,
+) -> dict[str, Any]:
 
-    Edge matching considers (src_name, dst_name, edge_type) triples.
-    """
-    static_edges: set[Tuple[str, str, str]] = set()
+    static_edges: set[tuple[str, str, str]] = set()
     for u, v in static_graph.edges():
         utype = static_graph.edges[u, v].get("edge_type", "dependency")
         uname = static_graph.nodes[u].get("name", u)
@@ -142,20 +115,18 @@ def compare_relationship_detection(
             "note": "LLM was unavailable.",
         }
 
-    llm_edges: set[Tuple[str, str, str]] = set()
+    llm_edges: set[tuple[str, str, str]] = set()
     for u, v in llm_graph.edges():
         utype = llm_graph.edges[u, v].get("edge_type", "dependency")
         uname = llm_graph.nodes[u].get("name", u)
         vname = llm_graph.nodes[v].get("name", v)
         llm_edges.add((uname, vname, utype))
 
-    # Match edges (name pair only, ignoring edge type)
     static_edge_pairs = {(s, d) for s, d, _ in static_edges}
     llm_edge_pairs = {(s, d) for s, d, _ in llm_edges}
 
     matched_pairs = static_edge_pairs & llm_edge_pairs
 
-    # Edge type accuracy: of the matched pairs, how many have the correct type?
     type_correct = 0
     for s, d in matched_pairs:
         stype = next((t for sn, dn, t in static_edges if sn == s and dn == d), "")
@@ -188,14 +159,9 @@ def compare_relationship_detection(
 
 def compare_context_quality(
     static_graph: nx.DiGraph,
-    llm_graph: Optional[nx.DiGraph],
-) -> Dict[str, Any]:
-    """Evaluate context/package grouping quality.
-
-    Static analysis uses package declarations (Java) or file paths (Python).
-    LLM-based uses semantic grouping (SLM-suggested contexts).
-    """
-    static_contexts: Dict[str, str] = {}
+    llm_graph: nx.DiGraph | None,
+) -> dict[str, Any]:
+    static_contexts: dict[str, str] = {}
     for n in static_graph.nodes():
         ctx = static_graph.nodes[n].get("package", "") or static_graph.nodes[n].get("context", "Default")
         static_contexts[n] = ctx
@@ -207,7 +173,7 @@ def compare_context_quality(
             "note": "LLM unavailable.",
         }
 
-    llm_contexts: Dict[str, str] = {}
+    llm_contexts: dict[str, str] = {}
     for n in llm_graph.nodes():
         ctx = llm_graph.nodes[n].get("context", "Default Package")
         llm_contexts[n] = ctx
@@ -224,25 +190,15 @@ def compare_context_quality(
         "context_overlap": len(static_ctx_set & llm_ctx_set) / max(len(static_ctx_set | llm_ctx_set), 1),
     }
 
-
 # ---------------------------------------------------------------------------
 # Full evaluation report
 # ---------------------------------------------------------------------------
 def run_full_comparison(
     repo_root: str,
-    text_description: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Run a full comparison between static analysis and LLM approaches.
+    text_description: str | None = None,
+) -> dict[str, Any]:
 
-    Args:
-        repo_root: Path to source code directory.
-        text_description: Optional natural language description for
-                          additional text-to-diagram comparison.
-
-    Returns:
-        Comprehensive evaluation report dict.
-    """
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "repo": repo_root,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -298,8 +254,10 @@ def run_full_comparison(
     return report
 
 
-def generate_comparison_summary(report: Dict[str, Any]) -> str:
-    """Generate a human-readable summary of the comparison report."""
+def generate_comparison_summary(report: dict[str, Any]) -> str:
+    """
+        Generate a human-readable summary of the comparison report.
+    """
     lines = []
     lines.append("=" * 60)
     lines.append("  STATIC ANALYSIS vs LLM COMPARISON REPORT")
@@ -353,8 +311,10 @@ def generate_comparison_summary(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def save_comparison_report(report: Dict[str, Any], output_path: str) -> str:
-    """Save the comparison report as JSON."""
+def save_comparison_report(report: dict[str, Any], output_path: str) -> str:
+    """
+        Save the comparison report as JSON.
+    """
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False, default=str)
     return output_path

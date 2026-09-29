@@ -20,13 +20,10 @@ AI_project/
 │   │   └── relationships.py          # Edge classification: Inheritance, Implementation, Composition, Dependency
 │   ├── ai/
 │   │   ├── __init__.py
-│   │   ├── ollama_client.py          # HTTP client to Ollama REST API
 │   │   ├── semantic_grouper.py       # Cluster connected classes → suggest bounded context names
 │   │   └── summarizer.py             # Class → 1-sentence responsibility label
-│   └── gaphor_gen/
-│       ├── __init__.py
-│       ├── model_builder.py          # ElementFactory, UML element creation
-│       └── serializer.py            # Save .gaphor XML via gaphor.storage
+│   └── exporters/
+│       └── plantuml_exporter.py      # Enriched graph → PlantUML class diagram
 ├── requirements.txt
 └── README.md
 ```
@@ -48,10 +45,10 @@ flowchart TD
     I -->|Timeout/Failure| K[Fallback: Raw Class Names]
     J --> L[Enriched Graph]
     K --> L
-    L --> M[Gaphor Model Builder]
-    M --> N[ElementFactory: Classes, Packages, Relationships]
-    N --> O[gaphor.storage.save]
-    O --> P[.gaphor File]
+    L --> M[PlantUML Exporter]
+    M --> N[Class / Interface / Relationship blocks]
+    N --> O[Write .puml source]
+    O --> P[.puml File]
     P --> Q[Download / File Path in Streamlit]
 ```
 
@@ -64,7 +61,6 @@ flowchart TD
   tree-sitter>=0.20.0
   networkx>=3.0
   streamlit>=1.28.0
-  gaphor>=2.25.0
   requests>=2.31.0
   ```
 - `config.py` stores: `OLLAMA_URL = "http://localhost:11434"`, `OLLAMA_MODEL = "phi3:mini"`, supported file extensions, timeout values
@@ -117,10 +113,12 @@ flowchart TD
 
 ### Phase 3: AI Augmentation
 - **Input:** Raw `nx.DiGraph` from Phase 2
-- **`ollama_client.py`:**
-  - Wraps `requests.post` to `http://localhost:11434/api/generate`.
-  - Payload: `{"model": "phi3:mini", "prompt": "...", "stream": false, "options": {"temperature": 0.1}}`.
-  - Timeout: 30s. On failure → return `None`.
+- **`llm/llm_client.py` + `llm/factory.py`:**
+  - `LLMClient` calls an OpenAI-compatible endpoint (`client.responses.create`).
+  - Connection settings come from `LLMParameters` (`LLM_BASE_URL`, `LLM_MODEL`,
+    `LLM_API_KEY`, `LLM_APP_ID`); point `LLM_BASE_URL` at a local Ollama instance
+    (e.g. `http://localhost:11434/v1`) to keep inference on-machine.
+  - On failure callers fall back to the raw class / package names.
 - **`semantic_grouper.py`:**
   1. Extract connected components from the graph.
   2. For each component, build a prompt listing class names and their relationships.
@@ -134,27 +132,19 @@ flowchart TD
   4. On failure → `responsibility = ""`.
 - **Output:** Enriched `nx.DiGraph` with `context` and `responsibility` node attributes.
 
-### Phase 4: Direct Gaphor Model Generation
+### Phase 4: PlantUML Export
 - **Input:** Enriched `nx.DiGraph`
-- **`model_builder.py`:**
-  1. `from gaphor.core.modeling import ElementFactory`
-  2. `element_factory = ElementFactory()`
-  3. Create `Package` elements for each unique `context` value.
-  4. For each graph node:
-     - If `type == "interface"` → `element_factory.create(UML.InterfaceItem)` (Interface)
-     - If `type == "class"` → `element_factory.create(UML.ClassItem)` (Class)
-     - Assign `.name = node_name`, `.package = context_package`
-  5. For each graph edge:
-     - `Inheritance` → `element_factory.create(UML.GeneralizationItem)` 
-     - `Implementation` → `element_factory.create(UML.RealizationItem)`
-     - `Composition` → `element_factory.create(UML.AssociationItem)` with aggregation
-     - `Dependency` → `element_factory.create(UML.DependencyItem)`
-  6. Return the `element_factory`.
-- **`serializer.py`:**
-  - `from gaphor.storage import storage`
-  - `with open(output_path, "w") as f: storage.save(element_factory, f)`
-  - Returns path to `.gaphor` file.
-- **Output:** Valid `.gaphor` XML file.
+- **`exporters/plantuml_exporter.py`:**
+  1. `to_plantuml(graph)` opens the document with `@startuml` and a `title`.
+  2. Each graph node becomes a `class Name { … }` or `interface Name { … }` block, grouped
+     by its `context` into PlantUML packages.
+  3. Each graph edge becomes a UML relationship:
+     - `inheritance` → `A <|-- B`
+     - `implementation` → `A <|.. B`
+     - `composition` → `A *-- B`
+     - `dependency` → `A ..> B`
+  4. Closes with `@enduml`.
+- **Output:** A `.puml` document that renders in any PlantUML viewer (including the Vue frontend).
 
 ### Phase 5: Minimal Streamlit UI
 - **`main.py`:**
@@ -165,27 +155,18 @@ flowchart TD
     1. `st.spinner("Analyzing source files...")` → Phase 1
     2. `st.spinner("Building dependency graph...")` → Phase 2
     3. `st.spinner("AI enrichment (this may take a moment)...")` → Phase 3
-    4. `st.spinner("Generating .gaphor model...")` → Phase 4
-    5. `st.success("Done!")` + download button for `.gaphor` file
+    4. `st.spinner("Rendering PlantUML diagram...")` → Phase 4
+    5. `st.success("Done!")` + download button for the `.puml` file
   - Display graph statistics: node count, edge count, context names found.
 
 ## Key Design Decisions
 
 1. **tree-sitter over AST module:** The standard `ast` module only works for Python. Using `tree-sitter` with language grammars gives us a uniform parsing API across Java and Python, and is easier to extend to more languages (C#, TypeScript, etc.).
 
-2. **No intermediate Mermaid:** Skipping Mermaid eliminates an unnecessary serialization step and ensures the Gaphor model retains full UML semantics (aggregation vs. association, realization vs. generalization).
+2. **PlantUML as the output format:** Emitting a `.puml` document directly keeps full UML semantics (aggregation vs. association, realization vs. generalization) in a plain-text format that renders in any PlantUML viewer.
 
 3. **SLM for semantic enrichment only:** The structural extraction is deterministic via tree-sitter — the SLM only handles subjective tasks (naming contexts, summarizing purpose). This keeps the core architecture reproducible.
 
-4. **Graceful AI fallback:** If Ollama is unreachable, the system produces a fully valid `.gaphor` file with raw class/package names. AI is an enhancement, not a requirement.
+4. **Graceful AI fallback:** If Ollama is unreachable, the system produces a fully valid `.puml` document with raw class/package names. AI is an enhancement, not a requirement.
 
 5. **Phi3:mini:** Chosen for speed and low resource usage. Temperature set to 0.1 for consistent, near-deterministic outputs from the same input.
-
-## Gaphor API Compatibility Notes
-
-The Gaphor Python API has evolved. Key imports to verify at implementation time:
-- `gaphor.UML` — contains UML model elements (Class, Interface, Package, Association, Generalization, Dependency, Realization)
-- `gaphor.core.modeling.ElementFactory` — factory for creating model elements
-- `gaphor.storage.storage.save` — serializes model to `.gaphor` file
-
-If using Gaphor 3.x, the API may differ. The code should handle this with a version check or try/except on imports.

@@ -1,21 +1,20 @@
-"""
-Use the local SLM to generate one-sentence responsibility labels
-for complex classes.
-"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import networkx as nx
 
-from src.ai.ollama_client import query_ollama
+from src.llm.factory import build_llm_client, try_build_llm_client
 
-# Minimum number of methods before we bother the SLM for a summary.
+if TYPE_CHECKING:
+    from src.llm.llm_client import LLMClient
+
 MIN_METHODS_FOR_SUMMARY = 5
 
+def summarize_class(
+    node_name: str, methods: list[str], llm: LLMClient | None = None
+) -> str:
 
-def summarize_class(node_name: str, methods: list[str]) -> str:
-    """
-    Ask the SLM for a one-sentence responsibility summary of a class.
-    Returns an empty string on failure.
-    """
     if len(methods) < MIN_METHODS_FOR_SUMMARY:
         return ""
 
@@ -25,19 +24,24 @@ def summarize_class(node_name: str, methods: list[str]) -> str:
         "Summarize this class's responsibility in ONE short sentence."
     )
 
-    result = query_ollama(prompt)
-    return result if result else ""
+    try:
+        result = (llm or build_llm_client()).ask_llm(prompt)
+    except Exception:
+        return ""
+
+    return (result or "").strip()
 
 
-def enrich_graph_with_summaries(graph: nx.DiGraph) -> None:
-    """
-    For each node in the graph with enough methods, query the SLM for a
-    responsibility summary and store it as a 'responsibility' attribute.
-    """
+def enrich_graph_with_summaries(
+    graph: nx.DiGraph, llm: LLMClient | None = None
+) -> None:
+
+    client = llm if llm is not None else try_build_llm_client()
+
     for node_id in graph.nodes():
         node = graph.nodes[node_id]
         methods = node.get("methods", [])
         method_names = [m.get("name", "") for m in methods]
-        summary = summarize_class(str(node_id), method_names)
+        summary = summarize_class(str(node_id), method_names, llm=client)
         if summary:
             node["responsibility"] = summary

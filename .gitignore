@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 .env/
+.env
 
 # Python cache
 __pycache__/
@@ -11,8 +12,13 @@ __pycache__/
 dist/
 build/
 
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
 # Generated output files
-*.gaphor
+*.puml
 
 # IDEs
 .vscode/
@@ -29,5 +35,26 @@ Desktop.ini
 # Temporary / test artifacts
 test_fix.py
 test_e2e.py
-test_*.gaphor
+test_*.puml
 fixed_output.*
+
+# --- Local working copies of third-party code (dataset source) ----------------
+# `repos/` holds cloned upstream projects. Never commit these: they are large,
+# they are not ours, and their licences vary (MIT / Apache-2.0 / BSD / others).
+repos/
+
+# --- Derived datasets and trained adapters ------------------------------------
+# `data/*.jsonl` is generated from the repositories in `repos/`, and `models/`
+# holds training output. Both derive from third-party code, so verify licensing
+# before committing either. Un-ignore `data/` deliberately if you decide the
+# derived JSONL is safe to redistribute.
+data/
+models/
+chroma_db/
+
+# --- Training logs -----------------------------------------------------------
+*.log
+
+# --- Local working notes ------------------------------------------------------
+# Exploratory notes and design drafts, kept out of the published tree.
+docs/

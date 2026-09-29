@@ -1,14 +1,3 @@
-"""
-Export an enriched NetworkX graph to Structurizr DSL format.
-
-Structurizr DSL is a text-based architecture description language
-designed for the C4 model. This exporter maps our generic graph
-into a Structurizr workspace with:
-  - People (for user-facing components)
-  - Software Systems
-  - Containers (our classes/interfaces)
-  - Relationships between them
-"""
 import networkx as nx
 
 

@@ -2,7 +2,6 @@
 # Architecture Diagram Generator — Python Dependencies
 # ==============================================================================
 # Install with:   pip install -r requirements.txt
-# Or on first run: setup.bat
 # ==============================================================================
 
 # --- Environment ------------------------------------------------------------------
@@ -16,10 +15,7 @@ tree-sitter-python>=0.23.0
 # --- Graph processing --------------------------------------------------------------
 networkx>=3.0
 
-# --- UI (Streamlit web + Tkinter desktop built-in) ----------------------------------
-streamlit>=1.28.0
-
-# --- HTTP client (Ollama REST API) --------------------------------------------------
+# --- HTTP client (GitHub / GitLab merge-request comments) -----------------------------
 requests>=2.31.0
 
 # --- Multi-format diagram export ---------------------------------------------------
@@ -33,6 +29,17 @@ sentence-transformers>=2.2.0
 
 # --- Dataset processing -------------------------------------------------------------
 pandas>=2.0.0
+
+# --- LLM client (OpenAI-compatible Responses API) -----------------------------------
+# `src/llm/llm_client.py` uses client.responses.create / .parse, so a recent
+# openai release is required. If `responses.parse` is missing, upgrade with
+# `pip install -U openai`.
+openai>=1.66.0
+pydantic>=2.0.0
+
+# --- API server ----------------------------------------------------------------------
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
 
 # --- Testing / Development ----------------------------------------------------------
 pytest>=7.0.0

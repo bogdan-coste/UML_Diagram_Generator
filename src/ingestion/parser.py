@@ -1,27 +1,19 @@
-"""
-Parse source files using tree-sitter to extract structural metadata:
-classes, interfaces, methods, imports, package declarations, fields,
-constructor parameters, and return types.
-"""
-
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-from tree_sitter import Language, Parser, Node
+from tree_sitter import Language, Node, Parser
 
-from src.config import JAVA_LANGUAGE_PACKAGE, PYTHON_LANGUAGE_PACKAGE
+_java_parser: Parser | None = None
+_python_parser: Parser | None = None
 
-# ---------------------------------------------------------------------------
-# Language grammar initialisation (lazy-loaded singletons)
-# ---------------------------------------------------------------------------
-_java_parser: Optional[Parser] = None
-_python_parser: Optional[Parser] = None
+def _get_parser(file_path: str) -> Parser | None:
+    """
+        Return a cached tree-sitter Parser for the given file's language.
+    """
 
-
-def _get_parser(file_path: str) -> Optional[Parser]:
-    """Return a cached tree-sitter Parser for the given file's language."""
     global _java_parser, _python_parser
     ext = os.path.splitext(file_path)[1].lower()
+
     if ext == ".java":
         if _java_parser is None:
             import tree_sitter_java
@@ -49,6 +41,7 @@ JAVA_STD_PREFIXES = frozenset({
     "org.hibernate.", "org.apache.", "org.junit.", "org.mockito.",
     "org.slf4j.", "com.fasterxml.", "lombok.", "kotlin.",
 })
+
 PYTHON_STD_MODULES = frozenset({
     "os", "sys", "re", "json", "datetime", "collections", "itertools",
     "functools", "typing", "abc", "dataclasses", "enum", "io", "pathlib",
@@ -59,44 +52,48 @@ PYTHON_STD_MODULES = frozenset({
     "pickle", "pkgutil", "platform", "pprint", "queue", "shutil",
     "signal", "socket", "sqlite3", "ssl", "statistics", "string",
     "struct", "subprocess", "tempfile", "threading", "time", "traceback",
-    "types", "uuid", "warnings", "weakref", "xml", "zipfile",
-    "dataclasses",
+    "types", "uuid", "warnings", "weakref", "xml", "zipfile"
 })
 
-
 def _is_java_stdlib(import_name: str) -> bool:
-    """Return True if *import_name* starts with a known stdlib/ecosystem prefix."""
+    """
+        return True if the toplevel is a standard java library
+    """
     for prefix in JAVA_STD_PREFIXES:
         if import_name.startswith(prefix):
             return True
     return False
 
-
 def _is_python_stdlib(module_name: str) -> bool:
-    """Return True if the top-level module is a Python standard library."""
+    """
+        return True if the toplevel is a standard python library
+    """
     top = module_name.split(".")[0]
     return top in PYTHON_STD_MODULES
 
 
-# ---------------------------------------------------------------------------
-# Text extraction helpers
-# ---------------------------------------------------------------------------
 def _text_of(node: Node, source: bytes) -> str:
-    """Return the source text spanned by *node*, decoded to str."""
+    """
+        Return the source text spanned by *node*, decoded to str.
+    """
+
     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
-
-def _first_child_text(node: Node, child_type: str, source: bytes) -> Optional[str]:
-    """Return the text of the first child of *node* matching *child_type*."""
+def _first_child_text(node: Node, child_type: str, source: bytes) -> str | None:
+    """
+        Return the text of the first child of *node* matching *child_type*.
+    """
     for child in node.children:
         if child.type == child_type:
             return _text_of(child, source)
     return None
 
+def _find_all(node: Node, *types: str) -> list[Node]:
+    """
+        Recursively collect all descendants of *node* whose type is in *types*.
+    """
 
-def _find_all(node: Node, *types: str) -> List[Node]:
-    """Recursively collect all descendants of *node* whose type is in *types*."""
-    results: List[Node] = []
+    results: list[Node] = []
     if node.type in types:
         results.append(node)
     for child in node.children:
@@ -104,13 +101,13 @@ def _find_all(node: Node, *types: str) -> List[Node]:
     return results
 
 
-def _find_direct(node: Node, *types: str) -> List[Node]:
+def _find_direct(node: Node, *types: str) -> list[Node]:
     """Return direct children of *node* whose type is in *types*."""
     return [child for child in node.children if child.type in types]
 
 
 # ---------------------------------------------------------------------------
-# Java AST extraction
+# Java Abstract Syntax Tree extraction
 # ---------------------------------------------------------------------------
 def _extract_java_package(root: Node, source: bytes) -> str:
     for child in root.children:
@@ -120,9 +117,8 @@ def _extract_java_package(root: Node, source: bytes) -> str:
                     return _text_of(sc, source)
     return ""
 
-
-def _extract_java_imports(root: Node, source: bytes) -> List[str]:
-    imports: List[str] = []
+def _extract_java_imports(root: Node, source: bytes) -> list[str]:
+    imports: list[str] = []
     for child in root.children:
         if child.type == "import_declaration":
             for sc in child.children:
@@ -132,9 +128,10 @@ def _extract_java_imports(root: Node, source: bytes) -> List[str]:
                         imports.append(imp)
     return imports
 
-
-def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str]) -> Optional[Dict[str, Any]]:
-    """Extract metadata from a class_declaration node."""
+def _extract_java_class(node: Node, source: bytes, pkg: str, imports: list[str]) -> dict[str, Any] | None:
+    """
+        Extract metadata from a class_declaration node.
+    """
     name = _first_child_text(node, "identifier", source)
     if not name:
         return None
@@ -146,7 +143,7 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
         superclass = _first_child_text(superclass_child[0], "type_identifier", source) or ""
 
     # Interfaces
-    interfaces: List[str] = []
+    interfaces: list[str] = []
     si = _find_direct(node, "super_interfaces")
     if si:
         for ti in _find_all(si[0], "type_identifier"):
@@ -155,7 +152,7 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
                 interfaces.append(txt)
 
     # Methods
-    methods: List[Dict[str, Any]] = []
+    methods: list[dict[str, Any]] = []
     body = _find_direct(node, "class_body")
     if body:
         for method_node in _find_direct(body[0], "method_declaration", "constructor_declaration"):
@@ -169,7 +166,7 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
                     return_type = _text_of(ret[0], source)  # includes generics
 
             # Parameters
-            params: List[str] = []
+            params: list[str] = []
             fp_list = _find_direct(method_node, "formal_parameters")
             if fp_list:
                 for fp in _find_all(fp_list[0], "formal_parameter"):
@@ -183,8 +180,7 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
                 "params": params,
             })
 
-    # Fields (for composition detection)
-    fields: List[str] = []
+    fields: list[str] = []
     if body:
         for fd in _find_direct(body[0], "field_declaration"):
             ti = _find_direct(fd, "type_identifier")
@@ -193,8 +189,7 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
                 if ftype not in fields:
                     fields.append(ftype)
 
-    # Constructor parameters (for composition detection)
-    constructor_params: List[str] = []
+    constructor_params: list[str] = []
     if body:
         for constr in _find_direct(body[0], "constructor_declaration"):
             fp_list = _find_direct(constr, "formal_parameters")
@@ -219,13 +214,13 @@ def _extract_java_class(node: Node, source: bytes, pkg: str, imports: List[str])
     }
 
 
-def _extract_java_interface(node: Node, source: bytes, pkg: str, imports: List[str]) -> Optional[Dict[str, Any]]:
+def _extract_java_interface(node: Node, source: bytes, pkg: str, imports: list[str]) -> dict[str, Any] | None:
     """Extract metadata from an interface_declaration node."""
     name = _first_child_text(node, "identifier", source)
     if not name:
         return None
 
-    methods: List[Dict[str, Any]] = []
+    methods: list[dict[str, Any]] = []
     body = _find_direct(node, "interface_body")
     if body:
         for md in _find_direct(body[0], "method_declaration"):
@@ -236,7 +231,7 @@ def _extract_java_interface(node: Node, source: bytes, pkg: str, imports: List[s
                 ret = _find_direct(md, "generic_type")
             if ret:
                 ret_type = _text_of(ret[0], source)
-            params: List[str] = []
+            params: list[str] = []
             fp_list = _find_direct(md, "formal_parameters")
             if fp_list:
                 for fp in _find_all(fp_list[0], "formal_parameter"):
@@ -254,7 +249,7 @@ def _extract_java_interface(node: Node, source: bytes, pkg: str, imports: List[s
     }
 
 
-def _parse_java(file_path: str) -> Dict[str, Any]:
+def _parse_java(file_path: str) -> dict[str, Any]:
     parser = _get_parser(file_path)
     if parser is None:
         return {"classes": [], "interfaces": []}
@@ -267,8 +262,8 @@ def _parse_java(file_path: str) -> Dict[str, Any]:
     pkg = _extract_java_package(root, source)
     imports = _extract_java_imports(root, source)
 
-    classes: List[Dict[str, Any]] = []
-    interfaces: List[Dict[str, Any]] = []
+    classes: list[dict[str, Any]] = []
+    interfaces: list[dict[str, Any]] = []
 
     for node in root.children:
         if node.type == "class_declaration":
@@ -284,12 +279,11 @@ def _parse_java(file_path: str) -> Dict[str, Any]:
 
     return {"classes": classes, "interfaces": interfaces}
 
-
 # ---------------------------------------------------------------------------
-# Python AST extraction
+# Python Abstract Syntax Tree extraction
 # ---------------------------------------------------------------------------
-def _extract_python_imports(root: Node, source: bytes) -> List[str]:
-    imports: List[str] = []
+def _extract_python_imports(root: Node, source: bytes) -> list[str]:
+    imports: list[str] = []
     for child in root.children:
         if child.type == "import_statement":
             for dn in _find_direct(child, "dotted_name"):
@@ -306,15 +300,14 @@ def _extract_python_imports(root: Node, source: bytes) -> List[str]:
     return imports
 
 
-def _extract_python_class(node: Node, source: bytes, imports: List[str]) -> Optional[Dict[str, Any]]:
+def _extract_python_class(node: Node, source: bytes, imports: list[str]) -> dict[str, Any] | None:
     """Extract metadata from a class_definition node."""
     name = _first_child_text(node, "identifier", source)
     if not name:
         return None
 
-    # Superclasses from argument_list
     superclass = ""
-    interfaces: List[str] = []
+    interfaces: list[str] = []
     arg_list = _find_direct(node, "argument_list")
     if arg_list:
         idents = _find_all(arg_list[0], "identifier")
@@ -325,31 +318,26 @@ def _extract_python_class(node: Node, source: bytes, imports: List[str]) -> Opti
                 if txt not in ("metaclass",) and not txt.startswith("_"):
                     interfaces.append(txt)
 
-    # Methods (function_definition)
-    methods: List[Dict[str, Any]] = []
+    methods: list[dict[str, Any]] = []
     block = _find_direct(node, "block")
     if block:
         for fd in _find_direct(block[0], "function_definition"):
             mname = _first_child_text(fd, "identifier", source) or ""
-            # Return type
             ret_type = ""
             arrow = _find_direct(fd, "->")
             if arrow:
-                # The type follows the arrow node
                 arrow_idx = list(fd.children).index(arrow[0])
                 if arrow_idx + 1 < len(fd.children):
                     type_node = fd.children[arrow_idx + 1]
                     ret_type = _text_of(type_node, source)
 
-            # Parameters
-            params: List[str] = []
+            params: list[str] = []
             param_nodes = _find_direct(fd, "parameters")
             if param_nodes:
                 for p in _find_direct(param_nodes[0], "identifier"):
                     txt = _text_of(p, source)
                     if txt not in ("self", "cls"):
                         params.append(txt)
-                # Also collect typed parameters
                 for tp in _find_direct(param_nodes[0], "typed_parameter"):
                     ident = _find_direct(tp, "identifier")
                     if ident:
@@ -363,8 +351,7 @@ def _extract_python_class(node: Node, source: bytes, imports: List[str]) -> Opti
                 "params": params,
             })
 
-    # Fields (from __init__ body self.X assignments)
-    fields: List[str] = []
+    fields: list[str] = []
     if block:
         for fd in _find_direct(block[0], "function_definition"):
             if _first_child_text(fd, "identifier", source) == "__init__":
@@ -372,16 +359,13 @@ def _extract_python_class(node: Node, source: bytes, imports: List[str]) -> Opti
                 for ass in assignments:
                     attr_nodes = _find_direct(ass, "attribute")
                     for attr in attr_nodes:
-                        # Check it's self.X pattern
                         parts = list(attr.children)
-                        if len(parts) >= 3:
-                            if _text_of(parts[0], source) == "self" and parts[1].type == ".":
+                        if len(parts) >= 3 and _text_of(parts[0], source) == "self" and parts[1].type == ".":
                                 fname = _text_of(parts[2], source)
                                 if fname not in fields:
                                     fields.append(fname)
 
-    # Constructor param types (from __init__ typed_parameter)
-    constructor_params: List[str] = []
+    constructor_params: list[str] = []
     if block:
         for fd in _find_direct(block[0], "function_definition"):
             if _first_child_text(fd, "identifier", source) == "__init__":
@@ -403,11 +387,11 @@ def _extract_python_class(node: Node, source: bytes, imports: List[str]) -> Opti
         "fields": fields,
         "constructor_params": constructor_params,
         "imports": imports,
-        "package": "",  # Python doesn't have explicit package declarations
+        "package": ""
     }
 
 
-def _parse_python(file_path: str) -> Dict[str, Any]:
+def _parse_python(file_path: str) -> dict[str, Any]:
     parser = _get_parser(file_path)
     if parser is None:
         return {"classes": [], "interfaces": []}
@@ -419,33 +403,26 @@ def _parse_python(file_path: str) -> Dict[str, Any]:
     root = tree.root_node
     imports = _extract_python_imports(root, source)
 
-    classes: List[Dict[str, Any]] = []
+    classes: list[dict[str, Any]] = []
     for node in _find_all(root, "class_definition"):
         cls = _extract_python_class(node, source, imports)
         if cls:
             cls["file_path"] = file_path
             classes.append(cls)
 
-    # Python doesn't have formal interfaces; we treat abstract base classes
-    # as classes. The SLM may later classify them contextually.
     return {"classes": classes, "interfaces": []}
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-def parse_file(file_path: str) -> Dict[str, Any]:
+def parse_file(file_path: str) -> dict[str, Any]:
     """Parse a single source file and return {classes: [...], interfaces: [...]}."""
     if _is_java(file_path):
         return _parse_java(file_path)
     else:
         return _parse_python(file_path)
 
-
-def parse_all_files(file_paths: List[str]) -> Dict[str, Any]:
+def parse_all_files(file_paths: list[str]) -> dict[str, Any]:
     """Parse all collected source files and return an aggregated metadata dict."""
-    all_classes: List[Dict[str, Any]] = []
-    all_interfaces: List[Dict[str, Any]] = []
+    all_classes: list[dict[str, Any]] = []
+    all_interfaces: list[dict[str, Any]] = []
 
     for fp in file_paths:
         result = parse_file(fp)

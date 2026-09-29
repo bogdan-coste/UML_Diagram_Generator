@@ -1,1 +1,1 @@
-# AI: Ollama client, semantic grouping, and class summarization
+# AI: optional LLM enrichment — semantic grouping and class summarization

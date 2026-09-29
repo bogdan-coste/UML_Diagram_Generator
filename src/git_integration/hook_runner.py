@@ -7,7 +7,7 @@ Workflow:
   3. Compare the resulting dependency graph with the last committed version.
   4. If structural violations (removed interfaces, broken dependencies) are
      detected, block the commit and emit a report.
-  5. Optionally auto-regenerate the architecture diagram (.gaphor, .mmd, .puml).
+  5. Optionally auto-regenerate the architecture diagram (.puml, .mmd, .dot).
 """
 import hashlib
 import json

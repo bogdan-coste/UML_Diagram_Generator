@@ -3,7 +3,7 @@ Evaluation & Comparison engine: Static Analysis vs LLM-based diagram generation.
 
 Provides a systematic framework for comparing:
   1. Static analysis (tree-sitter) — deterministic structural extraction
-  2. LLM interpretation (Ollama SLM) — semantic understanding of architecture
+  2. LLM interpretation — semantic understanding of architecture
 
 Comparison dimensions:
   - Entity detection accuracy (precision/recall of identified classes/interfaces)
