@@ -1,6 +1,10 @@
+![ArchiGen AI](assets/repo_banner.jpg)
+
 # ArchiGen AI
 
-Automatic generation of software architecture diagrams from source code and natural-language descriptions, combining deterministic AST analysis with a fine-tuned code model.
+**Deterministic where it can be. Learned where it can't.**
+
+Architecture diagrams from source code or a plain-English description — tree-sitter AST analysis and dependency graphs where ground truth exists, a fine-tuned StarCoder2-3B adapter where it doesn't.
 
 Two input paths, deliberately handled by different machinery:
 
